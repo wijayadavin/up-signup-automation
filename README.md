@@ -98,7 +98,7 @@ npm start visit-login
 npm start visit-login --headless
 
 # Keep browser open indefinitely
-npm start visit-login --idle
+npm start visit-login --keep-open
 ```
 
 ### Process Users with Full Login Automation
