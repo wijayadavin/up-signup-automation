@@ -10,10 +10,26 @@ export interface LoginResult {
   error_code?: string;
   screenshots: {
     email_filled?: string;
-    password_filled?: string;
-    after_login?: string;
-    create_profile?: string;
-    suspicious_page?: string;
+          password_filled?: string;
+      after_login?: string;
+      create_profile?: string;
+      suspicious_page?: string;
+      experience_before?: string;
+      experience_after?: string;
+      goal_before?: string;
+      goal_after?: string;
+      workpref_before?: string;
+      workpref_after?: string;
+      resume_before?: string;
+      resume_after?: string;
+      education_before?: string;
+      education_after?: string;
+      skills_before?: string;
+      skills_after?: string;
+      overview_before?: string;
+      overview_after?: string;
+      general_before?: string;
+      general_after?: string;
   };
   url: string;
   evidence?: string;
@@ -413,46 +429,48 @@ export class LoginAutomation {
       // Take screenshot of create profile page
       this.screenshots.create_profile = await this.takeScreenshot('create_profile');
 
-      // Click Get Started button
-      const getStartedButton = await this.waitForSelectorWithRetry([
-        'button[data-qa="get-started-btn"]',
-        '[aria-label*="Get started"]',
-        'button:contains("Get Started")',
-      ], 15000);
+      // Detect current profile creation step and resume accordingly
+      const profileStep = this.detectProfileStep(currentUrl);
+      logger.info({ currentUrl, profileStep }, 'Detected profile creation step');
 
-      if (!getStartedButton) {
-        return {
-          status: 'soft_fail',
-          stage: 'create_profile',
-          error_code: 'GET_STARTED_NOT_FOUND',
-          screenshots: this.screenshots,
-          url: currentUrl,
-        };
+      // Handle different starting points
+      if (profileStep === 'initial') {
+        // Start from the beginning - click Get Started
+        const getStartedButton = await this.waitForSelectorWithRetry([
+          'button[data-qa="get-started-btn"]',
+          '[aria-label*="Get started"]',
+          'button:contains("Get Started")',
+        ], 15000);
+
+        if (!getStartedButton) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'GET_STARTED_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+          };
+        }
+
+        await getStartedButton.click();
+        await this.randomDelay(2000, 3000);
+
+        // Wait for navigation
+        try {
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (error) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'NAVIGATION_TIMEOUT',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+          };
+        }
       }
 
-      await getStartedButton.click();
-      await this.randomDelay(2000, 3000);
-
-      // Wait for navigation
-      try {
-        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-      } catch (error) {
-        return {
-          status: 'soft_fail',
-          stage: 'create_profile',
-          error_code: 'NAVIGATION_TIMEOUT',
-          screenshots: this.screenshots,
-          url: this.page.url(),
-        };
-      }
-
-      logger.info('Successfully completed create profile step');
-      return {
-        status: 'success',
-        stage: 'done',
-        screenshots: this.screenshots,
-        url: this.page.url(),
-      };
+      // Resume from the appropriate step based on current URL
+      return await this.resumeProfileCreation();
 
     } catch (error) {
       return {
@@ -462,6 +480,949 @@ export class LoginAutomation {
         screenshots: this.screenshots,
         url: this.page.url(),
         evidence: error instanceof Error ? error.message : 'Create profile failed',
+      };
+    }
+  }
+
+  private async handleExperienceStep(): Promise<LoginResult> {
+    try {
+      logger.info('Handling experience step...');
+
+      // Assert current route
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('/nx/create-profile/experience')) {
+        // Check for landmark element as fallback
+        const heading = await this.page.$('h1, h2, [role="heading"]');
+        if (heading) {
+          const headingText = await heading.evaluate(el => el.textContent?.toLowerCase() || '');
+          if (!headingText.includes('how would you like to work') && !headingText.includes('have you freelanced')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'EXPERIENCE_PAGE_NOT_FOUND',
+              screenshots: this.screenshots,
+              url: currentUrl,
+              evidence: `Expected experience page, got ${currentUrl}`,
+            };
+          }
+        } else {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'EXPERIENCE_PAGE_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: `Expected experience page, got ${currentUrl}`,
+          };
+        }
+      }
+
+      await this.waitForPageReady();
+      this.screenshots.experience_before = await this.takeScreenshot('experience_before');
+
+      // Find and select radio button for freelancing experience
+      const radioButton = await this.waitForSelectorWithRetry([
+        '[role="radio"][aria-label*="freelanc"]',
+        '[role="radio"][aria-label*="Freelanced"]',
+        'input[type="radio"][value="FREELANCED_BEFORE"]',
+        'input[type="radio"][aria-labelledby*="freelanc"]',
+      ], 15000);
+
+      if (!radioButton) {
+        // Try alternative selectors
+        const altRadioButton = await this.waitForSelectorWithRetry([
+          'input[type="radio"]',
+          '[role="radio"]',
+        ], 5000);
+        
+        if (!altRadioButton) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'EXPERIENCE_RADIO_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: 'No freelancing experience radio button found',
+          };
+        }
+        await altRadioButton.click();
+      } else {
+        await radioButton.click();
+      }
+
+      // Verify selection
+      const isChecked = await radioButton?.evaluate((el: Element) => {
+        if (el.getAttribute('role') === 'radio') {
+          return el.getAttribute('aria-checked') === 'true';
+        } else {
+          return (el as HTMLInputElement).checked;
+        }
+      }) || false;
+
+      if (!isChecked) {
+        // Try clicking again
+        await radioButton?.click();
+        await this.randomDelay(500, 1000);
+      }
+
+      await this.randomDelay(1000, 2000);
+
+      // Click Next button
+      const nextButton = await this.waitForSelectorWithRetry([
+        '[role="button"][aria-label*="Next"]',
+        '[data-test="next-button"]',
+        'button[data-ev-label="wizard_next"]',
+        'button:contains("Next")',
+      ], 10000);
+
+      if (!nextButton) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'EXPERIENCE_NEXT_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'Next button not found on experience page',
+        };
+      }
+
+      this.screenshots.experience_after = await this.takeScreenshot('experience_after');
+      await nextButton.click();
+      await this.randomDelay(2000, 3000);
+
+      // Wait for navigation to goal page
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
+        // Check if we're already on the goal page
+        const newUrl = this.page.url();
+        if (!newUrl.includes('/nx/create-profile/goal')) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'EXPERIENCE_NAVIGATION_FAILED',
+            screenshots: this.screenshots,
+            url: newUrl,
+            evidence: 'Failed to navigate to goal page',
+          };
+        }
+      }
+
+      logger.info('Experience step completed successfully');
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'EXPERIENCE_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Experience step failed',
+      };
+    }
+  }
+
+  private async handleGoalStep(): Promise<LoginResult> {
+    try {
+      logger.info('Handling goal step...');
+
+      // Assert current route
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('/nx/create-profile/goal')) {
+        // Check for landmark element as fallback
+        const heading = await this.page.$('h1, h2, [role="heading"]');
+        if (heading) {
+          const headingText = await heading.evaluate(el => el.textContent?.toLowerCase() || '');
+          if (!headingText.includes('what is your main goal') && !headingText.includes('primary goal')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'GOAL_PAGE_NOT_FOUND',
+              screenshots: this.screenshots,
+              url: currentUrl,
+              evidence: `Expected goal page, got ${currentUrl}`,
+            };
+          }
+        } else {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'GOAL_PAGE_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: `Expected goal page, got ${currentUrl}`,
+          };
+        }
+      }
+
+      await this.waitForPageReady();
+      this.screenshots.goal_before = await this.takeScreenshot('goal_before');
+
+      // Find and select radio button for "Exploring" goal
+      const radioButton = await this.waitForSelectorWithRetry([
+        '[role="radio"][aria-label*="explor"]',
+        '[role="radio"][aria-label*="Exploring"]',
+        'input[type="radio"][value="EXPLORING"]',
+        'input[type="radio"][aria-labelledby*="explor"]',
+      ], 15000);
+
+      if (!radioButton) {
+        // Try alternative selectors
+        const altRadioButton = await this.waitForSelectorWithRetry([
+          'input[type="radio"]',
+          '[role="radio"]',
+        ], 5000);
+        
+        if (!altRadioButton) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'GOAL_RADIO_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: 'No exploring goal radio button found',
+          };
+        }
+        await altRadioButton.click();
+      } else {
+        await radioButton.click();
+      }
+
+      // Verify selection
+      const isChecked = await radioButton?.evaluate((el: Element) => {
+        if (el.getAttribute('role') === 'radio') {
+          return el.getAttribute('aria-checked') === 'true';
+        } else {
+          return (el as HTMLInputElement).checked;
+        }
+      }) || false;
+
+      if (!isChecked) {
+        // Try clicking again
+        await radioButton?.click();
+        await this.randomDelay(500, 1000);
+      }
+
+      await this.randomDelay(1000, 2000);
+
+      // Click Next button
+      const nextButton = await this.waitForSelectorWithRetry([
+        '[role="button"][aria-label*="Next"]',
+        '[data-test="next-button"]',
+        'button[data-ev-label="wizard_next"]',
+        'button:contains("Next")',
+      ], 10000);
+
+      if (!nextButton) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'GOAL_NEXT_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'Next button not found on goal page',
+        };
+      }
+
+      this.screenshots.goal_after = await this.takeScreenshot('goal_after');
+      await nextButton.click();
+      await this.randomDelay(2000, 3000);
+
+      // Wait for navigation to work preference page
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
+        // Check if we're already on the work preference page
+        const newUrl = this.page.url();
+        if (!newUrl.includes('/nx/create-profile/work-preference')) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'GOAL_NAVIGATION_FAILED',
+            screenshots: this.screenshots,
+            url: newUrl,
+            evidence: 'Failed to navigate to work preference page',
+          };
+        }
+      }
+
+      logger.info('Goal step completed successfully');
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'GOAL_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Goal step failed',
+      };
+    }
+  }
+
+  private async handleWorkPreferenceStep(): Promise<LoginResult> {
+    try {
+      logger.info('Handling work preference step...');
+
+      // Assert current route
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('/nx/create-profile/work-preference')) {
+        // Check for landmark element as fallback
+        const heading = await this.page.$('h1, h2, [role="heading"]');
+        if (heading) {
+          const headingText = await heading.evaluate(el => el.textContent?.toLowerCase() || '');
+          if (!headingText.includes('work preference') && !headingText.includes('how would you like to get paid')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'WORK_PREF_PAGE_NOT_FOUND',
+              screenshots: this.screenshots,
+              url: currentUrl,
+              evidence: `Expected work preference page, got ${currentUrl}`,
+            };
+          }
+        } else {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'WORK_PREF_PAGE_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: `Expected work preference page, got ${currentUrl}`,
+          };
+        }
+      }
+
+      await this.waitForPageReady();
+      this.screenshots.workpref_before = await this.takeScreenshot('workpref_before');
+
+      // Find and select a checkbox for work preference
+      const checkbox = await this.waitForSelectorWithRetry([
+        '[role="checkbox"]',
+        'input[type="checkbox"]',
+      ], 15000);
+
+      if (!checkbox) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'WORK_PREF_CHECKBOX_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'No work preference checkbox found',
+        };
+      }
+
+      // Check if already checked, if not then check it
+      const isChecked = await checkbox.evaluate((el: Element) => {
+        if (el.getAttribute('role') === 'checkbox') {
+          return el.getAttribute('aria-checked') === 'true';
+        } else {
+          return (el as HTMLInputElement).checked;
+        }
+      });
+
+      if (!isChecked) {
+        await checkbox.click();
+        await this.randomDelay(500, 1000);
+      }
+
+      await this.randomDelay(1000, 2000);
+
+      // Click Next button
+      const nextButton = await this.waitForSelectorWithRetry([
+        '[role="button"][aria-label*="Next, create a profile"]',
+        '[role="button"][aria-label*="Next"]',
+        '[data-test="next-button"]',
+        'button[data-ev-label="wizard_next"]',
+        'button:contains("Next, create a profile")',
+        'button:contains("Next")',
+      ], 10000);
+
+      if (!nextButton) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'WORK_PREF_NEXT_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'Next button not found on work preference page',
+        };
+      }
+
+      this.screenshots.workpref_after = await this.takeScreenshot('workpref_after');
+      await nextButton.click();
+      await this.randomDelay(2000, 3000);
+
+      // Wait for navigation to resume import page
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
+        // Check if we're already on the resume import page
+        const newUrl = this.page.url();
+        if (!newUrl.includes('/nx/create-profile/resume-import')) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'WORK_PREF_NAVIGATION_FAILED',
+            screenshots: this.screenshots,
+            url: newUrl,
+            evidence: 'Failed to navigate to resume import page',
+          };
+        }
+      }
+
+      logger.info('Work preference step completed successfully');
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'WORK_PREF_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Work preference step failed',
+      };
+    }
+  }
+
+  private async handleResumeImportStep(): Promise<LoginResult> {
+    try {
+      logger.info('Handling resume import step...');
+
+      // Assert current route
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('/nx/create-profile/resume-import')) {
+        // Check for landmark element as fallback
+        const heading = await this.page.$('h1, h2, [role="heading"]');
+        if (heading) {
+          const headingText = await heading.evaluate(el => el.textContent?.toLowerCase() || '');
+          if (!headingText.includes('add your resume') && !headingText.includes('let\'s build your profile')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'RESUME_IMPORT_PAGE_NOT_FOUND',
+              screenshots: this.screenshots,
+              url: currentUrl,
+              evidence: `Expected resume import page, got ${currentUrl}`,
+            };
+          }
+        } else {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'RESUME_IMPORT_PAGE_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: `Expected resume import page, got ${currentUrl}`,
+          };
+        }
+      }
+
+      await this.waitForPageReady();
+      this.screenshots.resume_before = await this.takeScreenshot('resume_before');
+
+      // Click "Fill out manually" button
+      const manualButton = await this.waitForSelectorWithRetry([
+        '[role="button"][aria-label*="Fill out manually"]',
+        '[data-qa="resume-fill-manually-btn"]',
+        'button:contains("Fill out manually")',
+        'button:contains("Fill manually")',
+      ], 15000);
+
+      if (!manualButton) {
+        // Try alternative selectors
+        const altButton = await this.waitForSelectorWithRetry([
+          'button',
+          '[role="button"]',
+        ], 5000);
+        
+        if (!altButton) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'RESUME_MANUAL_BUTTON_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: 'Fill out manually button not found',
+          };
+        }
+        await altButton.click();
+      } else {
+        await manualButton.click();
+      }
+
+      await this.randomDelay(2000, 3000);
+      this.screenshots.resume_after = await this.takeScreenshot('resume_after');
+
+      logger.info('Resume import step completed successfully');
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'RESUME_IMPORT_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Resume import step failed',
+      };
+    }
+  }
+
+  private detectProfileStep(url: string): string {
+    if (url.includes('/nx/create-profile/experience')) {
+      return 'experience';
+    } else if (url.includes('/nx/create-profile/goal')) {
+      return 'goal';
+    } else if (url.includes('/nx/create-profile/work-preference')) {
+      return 'work_preference';
+    } else if (url.includes('/nx/create-profile/resume-import')) {
+      return 'resume_import';
+    } else if (url.includes('/nx/create-profile/education')) {
+      return 'education';
+    } else if (url.includes('/nx/create-profile/skills')) {
+      return 'skills';
+    } else if (url.includes('/nx/create-profile/overview')) {
+      return 'overview';
+    } else if (url.includes('/nx/create-profile/general')) {
+      return 'general';
+    } else if (url.includes('/nx/create-profile')) {
+      return 'initial';
+    } else {
+      return 'unknown';
+    }
+  }
+
+  private async resumeProfileCreation(): Promise<LoginResult> {
+    try {
+      // Get current URL after potential navigation
+      const currentUrl = this.page.url();
+      const currentStep = this.detectProfileStep(currentUrl);
+      
+      logger.info({ currentUrl, currentStep }, 'Resuming profile creation from step');
+
+      // Handle each step based on current URL
+      switch (currentStep) {
+        case 'experience':
+          return await this.handleExperienceStep();
+          
+        case 'goal':
+          return await this.handleGoalStep();
+          
+        case 'work_preference':
+          return await this.handleWorkPreferenceStep();
+          
+        case 'resume_import':
+          return await this.handleResumeImportStep();
+          
+        case 'education':
+          return await this.handleEducationStep();
+          
+        case 'skills':
+          return await this.handleSkillsStep();
+          
+        case 'overview':
+          return await this.handleOverviewStep();
+          
+        case 'general':
+          return await this.handleGeneralStep();
+          
+        default:
+          // If we're on an unknown step, try to continue with the normal flow
+          logger.warn({ currentStep, currentUrl }, 'Unknown profile step, attempting normal flow');
+          
+          // Try to handle experience step first
+          const experienceResult = await this.handleExperienceStep();
+          if (experienceResult.status !== 'success') {
+            return experienceResult;
+          }
+
+          // Continue with remaining steps
+          const goalResult = await this.handleGoalStep();
+          if (goalResult.status !== 'success') {
+            return goalResult;
+          }
+
+          const workPrefResult = await this.handleWorkPreferenceStep();
+          if (workPrefResult.status !== 'success') {
+            return workPrefResult;
+          }
+
+          const resumeResult = await this.handleResumeImportStep();
+          if (resumeResult.status !== 'success') {
+            return resumeResult;
+          }
+
+          logger.info('Successfully completed all create profile steps');
+          return {
+            status: 'success',
+            stage: 'done',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+          };
+      }
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'PROFILE_RESUME_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Failed to resume profile creation',
+      };
+    }
+  }
+
+  private async handleEducationStep(): Promise<LoginResult> {
+    try {
+      logger.info('Handling education step...');
+
+      // Assert current route
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('/nx/create-profile/education')) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'EDUCATION_PAGE_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: `Expected education page, got ${currentUrl}`,
+        };
+      }
+
+      await this.waitForPageReady();
+      this.screenshots.education_before = await this.takeScreenshot('education_before');
+
+      // Look for "Skip" or "Next" button to continue
+      const nextButton = await this.waitForSelectorWithRetry([
+        '[role="button"][aria-label*="Skip"]',
+        '[role="button"][aria-label*="Next"]',
+        '[data-test="next-button"]',
+        'button:contains("Skip")',
+        'button:contains("Next")',
+        'button:contains("Continue")',
+      ], 15000);
+
+      if (!nextButton) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'EDUCATION_NEXT_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'Next/Skip button not found on education page',
+        };
+      }
+
+      this.screenshots.education_after = await this.takeScreenshot('education_after');
+      await nextButton.click();
+      await this.randomDelay(2000, 3000);
+
+      // Wait for navigation to next step
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
+        // Check if we're already on the next page
+        const newUrl = this.page.url();
+        if (!newUrl.includes('/nx/create-profile/')) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'EDUCATION_NAVIGATION_FAILED',
+            screenshots: this.screenshots,
+            url: newUrl,
+            evidence: 'Failed to navigate from education page',
+          };
+        }
+      }
+
+      logger.info('Education step completed successfully');
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'EDUCATION_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Education step failed',
+      };
+    }
+  }
+
+  private async handleSkillsStep(): Promise<LoginResult> {
+    try {
+      logger.info('Handling skills step...');
+
+      // Assert current route
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('/nx/create-profile/skills')) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'SKILLS_PAGE_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: `Expected skills page, got ${currentUrl}`,
+        };
+      }
+
+      await this.waitForPageReady();
+      this.screenshots.skills_before = await this.takeScreenshot('skills_before');
+
+      // Look for "Skip" or "Next" button to continue
+      const nextButton = await this.waitForSelectorWithRetry([
+        '[role="button"][aria-label*="Skip"]',
+        '[role="button"][aria-label*="Next"]',
+        '[data-test="next-button"]',
+        'button:contains("Skip")',
+        'button:contains("Next")',
+        'button:contains("Continue")',
+      ], 15000);
+
+      if (!nextButton) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'SKILLS_NEXT_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'Next/Skip button not found on skills page',
+        };
+      }
+
+      this.screenshots.skills_after = await this.takeScreenshot('skills_after');
+      await nextButton.click();
+      await this.randomDelay(2000, 3000);
+
+      // Wait for navigation to next step
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
+        // Check if we're already on the next page
+        const newUrl = this.page.url();
+        if (!newUrl.includes('/nx/create-profile/')) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'SKILLS_NAVIGATION_FAILED',
+            screenshots: this.screenshots,
+            url: newUrl,
+            evidence: 'Failed to navigate from skills page',
+          };
+        }
+      }
+
+      logger.info('Skills step completed successfully');
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'SKILLS_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Skills step failed',
+      };
+    }
+  }
+
+  private async handleOverviewStep(): Promise<LoginResult> {
+    try {
+      logger.info('Handling overview step...');
+
+      // Assert current route
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('/nx/create-profile/overview')) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'OVERVIEW_PAGE_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: `Expected overview page, got ${currentUrl}`,
+        };
+      }
+
+      await this.waitForPageReady();
+      this.screenshots.overview_before = await this.takeScreenshot('overview_before');
+
+      // Look for "Next" or "Continue" button
+      const nextButton = await this.waitForSelectorWithRetry([
+        '[role="button"][aria-label*="Next"]',
+        '[role="button"][aria-label*="Continue"]',
+        '[data-test="next-button"]',
+        'button:contains("Next")',
+        'button:contains("Continue")',
+      ], 15000);
+
+      if (!nextButton) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'OVERVIEW_NEXT_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'Next button not found on overview page',
+        };
+      }
+
+      this.screenshots.overview_after = await this.takeScreenshot('overview_after');
+      await nextButton.click();
+      await this.randomDelay(2000, 3000);
+
+      // Wait for navigation to next step
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
+        // Check if we're already on the next page
+        const newUrl = this.page.url();
+        if (!newUrl.includes('/nx/create-profile/')) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'OVERVIEW_NAVIGATION_FAILED',
+            screenshots: this.screenshots,
+            url: newUrl,
+            evidence: 'Failed to navigate from overview page',
+          };
+        }
+      }
+
+      logger.info('Overview step completed successfully');
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'OVERVIEW_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Overview step failed',
+      };
+    }
+  }
+
+  private async handleGeneralStep(): Promise<LoginResult> {
+    try {
+      logger.info('Handling general step...');
+
+      // Assert current route
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('/nx/create-profile/general')) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'GENERAL_PAGE_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: `Expected general page, got ${currentUrl}`,
+        };
+      }
+
+      await this.waitForPageReady();
+      this.screenshots.general_before = await this.takeScreenshot('general_before');
+
+      // Look for "Next" or "Continue" button
+      const nextButton = await this.waitForSelectorWithRetry([
+        '[role="button"][aria-label*="Next"]',
+        '[role="button"][aria-label*="Continue"]',
+        '[data-test="next-button"]',
+        'button:contains("Next")',
+        'button:contains("Continue")',
+      ], 15000);
+
+      if (!nextButton) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'GENERAL_NEXT_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'Next button not found on general page',
+        };
+      }
+
+      this.screenshots.general_after = await this.takeScreenshot('general_after');
+      await nextButton.click();
+      await this.randomDelay(2000, 3000);
+
+      // Wait for navigation to next step
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
+        // Check if we're already on the next page
+        const newUrl = this.page.url();
+        if (!newUrl.includes('/nx/create-profile/')) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'GENERAL_NAVIGATION_FAILED',
+            screenshots: this.screenshots,
+            url: newUrl,
+            evidence: 'Failed to navigate from general page',
+          };
+        }
+      }
+
+      logger.info('General step completed successfully');
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'GENERAL_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'General step failed',
       };
     }
   }

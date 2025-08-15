@@ -96,6 +96,29 @@ export class BrowserManager {
     }
   }
 
+  async clearBrowserState(page: Page): Promise<void> {
+    try {
+      logger.info('Clearing browser state...');
+      
+      // Clear all cookies
+      const client = await page.target().createCDPSession();
+      await client.send('Network.clearBrowserCookies');
+      
+      // Clear localStorage and sessionStorage
+      await page.evaluate(() => {
+        localStorage.clear();
+        sessionStorage.clear();
+      });
+      
+      // Clear cache
+      await client.send('Network.clearBrowserCache');
+      
+      logger.info('Browser state cleared successfully');
+    } catch (error) {
+      logger.warn(error, 'Failed to clear browser state, continuing...');
+    }
+  }
+
   async close(): Promise<void> {
     if (this.browser) {
       try {

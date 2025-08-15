@@ -117,6 +117,10 @@ export class UpworkService {
 
       // Execute login automation
       page = await this.browserManager.newPage();
+      
+      // Clear browser state to ensure we start fresh for each user
+      await this.browserManager.clearBrowserState(page);
+      
       const loginAutomation = new LoginAutomation(page, user);
       const loginResult = await loginAutomation.execute();
 
@@ -195,6 +199,24 @@ export class UpworkService {
       }
 
       logger.info({ count: users.length }, 'Processing pending users');
+
+      // Create a temporary page to clear browser state at the start
+      let tempPage: Page | null = null;
+      try {
+        tempPage = await this.browserManager.newPage();
+        await this.browserManager.clearBrowserState(tempPage);
+        logger.info('Initial browser state cleared');
+      } catch (error) {
+        logger.warn(error, 'Failed to clear initial browser state, continuing...');
+      } finally {
+        if (tempPage) {
+          try {
+            await tempPage.close();
+          } catch (error) {
+            // Page might already be closed
+          }
+        }
+      }
 
       for (const user of users) {
         const result = await this.processUser(user);
