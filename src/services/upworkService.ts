@@ -1,6 +1,7 @@
 import { BrowserManager } from '../browser/browserManager.js';
 import { UserService } from './userService.js';
 import { getLogger } from '../utils/logger.js';
+import { LoginAutomation, type LoginResult } from './loginAutomation.js';
 import type { User } from '../types/database.js';
 import type { Page } from 'puppeteer';
 
@@ -31,7 +32,7 @@ export class UpworkService {
     };
   }
 
-  async visitLoginPage(): Promise<boolean> {
+  async visitLoginPage(keepOpen: boolean = false): Promise<boolean> {
     let page: Page | null = null;
     
     try {
@@ -53,33 +54,46 @@ export class UpworkService {
       const currentUrl = page.url();
       logger.info(`Current URL: ${currentUrl}`);
 
-      // Take a screenshot for debugging
-      await page.screenshot({ 
-        path: `./screenshots/login-page-${Date.now()}.png`,
-        fullPage: true 
-      });
+      // Take a screenshot for debugging (optional)
+      try {
+        await page.screenshot({ 
+          path: `./screenshots/login-page-${Date.now()}.png`,
+          fullPage: true 
+        });
+      } catch (screenshotError) {
+        logger.warn('Failed to take screenshot, continuing...');
+      }
 
       // Check for common login page elements
-      const loginForm = await page.$('form[action*="login"], input[name="login[username]"], input[name="login[password]"]');
-      
-      if (loginForm) {
-        logger.info('Successfully reached Upwork login page');
+      try {
+        const loginForm = await page.$('form[action*="login"], input[name="login[username]"], input[name="login[password]"]');
+        
+        if (loginForm) {
+          logger.info('Successfully reached Upwork login page');
+          return true;
+        } else {
+          logger.warn('Login form not found on page');
+          return false;
+        }
+      } catch (pageError) {
+        logger.warn('Failed to check login form, assuming page is valid');
         return true;
-      } else {
-        logger.warn('Login form not found on page');
-        return false;
       }
 
     } catch (error) {
       logger.error(error, 'Failed to visit login page');
       return false;
     } finally {
-      if (page) {
+      // Only close the page if not keeping it open
+      if (page && !keepOpen) {
         try {
+          logger.info('Closing page (keepOpen=false)');
           await page.close();
         } catch (error) {
           // Page might already be closed
         }
+      } else if (page && keepOpen) {
+        logger.info('Keeping page open (keepOpen=true)');
       }
     }
   }
@@ -88,7 +102,10 @@ export class UpworkService {
     success: boolean;
     errorCode?: string;
     errorMessage?: string;
+    loginResult?: LoginResult;
   }> {
+    let page: Page | null = null;
+    
     try {
       logger.info({ userId: user.id, email: user.email }, 'Processing user');
 
@@ -98,25 +115,55 @@ export class UpworkService {
         attempt_count: user.attempt_count + 1,
       });
 
-      // Visit login page first
-      const loginPageSuccess = await this.visitLoginPage();
-      
-      if (!loginPageSuccess) {
+      // Execute login automation
+      page = await this.browserManager.newPage();
+      const loginAutomation = new LoginAutomation(page, user);
+      const loginResult = await loginAutomation.execute();
+
+      // Log the result
+      logger.info({ 
+        userId: user.id, 
+        status: loginResult.status, 
+        stage: loginResult.stage,
+        error_code: loginResult.error_code,
+        url: loginResult.url 
+      }, 'Login automation completed');
+
+      // Handle different result types
+      if (loginResult.status === 'success') {
+        await this.userService.updateUserSuccess(user.id, {
+          success_at: new Date(),
+        });
+        logger.info({ userId: user.id }, 'User processed successfully');
+        return { 
+          success: true,
+          loginResult 
+        };
+      } else if (loginResult.status === 'soft_fail') {
+        // Handle special case for suspicious login - flag user for captcha
+        if (loginResult.error_code === 'SUSPICIOUS_LOGIN') {
+          await this.userService.updateUserCaptchaFlag(user.id, {
+            captcha_flagged_at: new Date(),
+          });
+          logger.info({ userId: user.id }, 'User flagged for captcha due to suspicious login');
+        }
+        
+        // Soft failures - update with error info but don't mark as permanent failure
         return {
           success: false,
-          errorCode: 'LOGIN_PAGE_FAILED',
-          errorMessage: 'Failed to reach login page',
+          errorCode: loginResult.error_code,
+          errorMessage: loginResult.evidence || 'Soft failure during login',
+          loginResult
+        };
+      } else {
+        // Hard failures - update with error info
+        return {
+          success: false,
+          errorCode: loginResult.error_code,
+          errorMessage: loginResult.evidence || 'Hard failure during login',
+          loginResult
         };
       }
-
-      // TODO: Implement actual sign-up automation
-      // For now, just mark as successful for testing
-      await this.userService.updateUserSuccess(user.id, {
-        success_at: new Date(),
-      });
-
-      logger.info({ userId: user.id }, 'User processed successfully');
-      return { success: true };
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -127,6 +174,14 @@ export class UpworkService {
         errorCode: 'PROCESSING_ERROR',
         errorMessage,
       };
+    } finally {
+      if (page) {
+        try {
+          await page.close();
+        } catch (error) {
+          // Page might already be closed
+        }
+      }
     }
   }
 

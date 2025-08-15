@@ -4,7 +4,8 @@ import type {
   User, 
   CreateUserInput, 
   UpdateUserAttemptInput, 
-  UpdateUserSuccessInput 
+  UpdateUserSuccessInput,
+  UpdateUserCaptchaFlagInput
 } from '../types/database.js';
 
 const logger = getLogger(import.meta.url);
@@ -122,6 +123,26 @@ export class UserService {
       return user;
     } catch (error) {
       logger.error(error, 'Failed to update user success');
+      throw error;
+    }
+  }
+
+  async updateUserCaptchaFlag(id: number, input: UpdateUserCaptchaFlagInput): Promise<User> {
+    try {
+      const [user] = await this.db
+        .updateTable('users')
+        .set({
+          captcha_flagged_at: input.captcha_flagged_at,
+          updated_at: new Date(),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .execute();
+
+      logger.info({ userId: id }, 'User flagged for captcha');
+      return user;
+    } catch (error) {
+      logger.error(error, 'Failed to update user captcha flag');
       throw error;
     }
   }

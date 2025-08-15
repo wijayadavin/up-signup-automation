@@ -23,6 +23,7 @@ export interface UsersTable {
   last_error_code: string | null;
   last_error_message: string | null;
   success_at: Date | null;
+  captcha_flagged_at: Date | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
@@ -39,6 +40,7 @@ export interface User {
   last_error_code: string | null;
   last_error_message: string | null;
   success_at: Date | null;
+  captcha_flagged_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -60,4 +62,8 @@ export interface UpdateUserAttemptInput {
 
 export interface UpdateUserSuccessInput {
   success_at: Date;
+}
+
+export interface UpdateUserCaptchaFlagInput {
+  captcha_flagged_at: Date;
 }

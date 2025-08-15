@@ -23,7 +23,7 @@ export class BrowserManager {
       headless: config.headless ?? (process.env.PUPPETEER_HEADLESS === 'true'),
       timeout: config.timeout ?? Number(process.env.PUPPETEER_TIMEOUT) ?? 30000,
       userDataDir: config.userDataDir ?? (process.env.PUPPETEER_USER_DATA_DIR ?? './user-data'),
-      viewport: config.viewport ?? { width: 1920, height: 1080 },
+      viewport: config.viewport ?? { width: 1440, height: 1080 },
     };
   }
 

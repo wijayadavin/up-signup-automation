@@ -58,6 +58,9 @@ npm start visit-login
 
 # Run in headless mode
 npm start visit-login --headless
+
+# Keep browser open indefinitely
+npm start visit-login --idle
 ```
 
 This will:

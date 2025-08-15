@@ -27,8 +27,17 @@ const visitLoginPageCmd = command({
       description: 'Run browser in headless mode',
       defaultValue: () => false,
     }),
+    keepOpen: flag({
+      type: boolean,
+      long: 'keep-open',
+      short: 'k',
+      description: 'Keep browser open indefinitely (only close on error)',
+      defaultValue: () => false,
+    }),
   },
   handler: async (args) => {
+    let upworkService: UpworkService | null = null;
+    
     try {
       logger.info('Starting Upwork login page visit...');
       
@@ -38,25 +47,92 @@ const visitLoginPageCmd = command({
       // Initialize services
       const browserManager = new BrowserManager({ headless: args.headless });
       const userService = new UserService();
-      const upworkService = new UpworkService(browserManager, userService);
+      upworkService = new UpworkService(browserManager, userService);
       
       // Visit login page
-      const success = await upworkService.visitLoginPage();
+      logger.info(`Keep open mode: ${args.keepOpen}`);
+      const success = await upworkService.visitLoginPage(args.keepOpen);
       
       if (success) {
         logger.info('Successfully visited Upwork login page');
+        
+        if (args.keepOpen) {
+          logger.info('Keeping browser open in keep-open mode. Press Ctrl+C to exit.');
+          
+          // Keep the process alive
+          process.on('SIGINT', async () => {
+            logger.info('Received SIGINT, closing browser...');
+            if (upworkService) {
+              await upworkService.close();
+            }
+            await closeDatabase();
+            process.exit(0);
+          });
+          
+          // Keep the process running
+          await new Promise(() => {
+            // This promise never resolves, keeping the process alive
+          });
+        } else {
+          // Cleanup
+          if (upworkService) {
+            await upworkService.close();
+          }
+          await closeDatabase();
+        }
       } else {
         logger.error('Failed to visit Upwork login page');
-        process.exit(1);
+        
+        if (args.keepOpen) {
+          logger.info('Keeping browser open in keep-open mode despite error. Press Ctrl+C to exit.');
+          
+          // Keep the process alive even on error
+          process.on('SIGINT', async () => {
+            logger.info('Received SIGINT, closing browser...');
+            if (upworkService) {
+              await upworkService.close();
+            }
+            await closeDatabase();
+            process.exit(0);
+          });
+          
+          // Keep the process running
+          await new Promise(() => {
+            // This promise never resolves, keeping the process alive
+          });
+        } else {
+          // Cleanup only if not in idle mode
+          if (upworkService) {
+            await upworkService.close();
+          }
+          await closeDatabase();
+          process.exit(1);
+        }
       }
-      
-      // Cleanup
-      await upworkService.close();
-      await closeDatabase();
       
     } catch (error) {
       logger.error(error, 'Failed to visit login page');
-      process.exit(1);
+      
+      if (args.keepOpen) {
+        logger.info('Keeping browser open in keep-open mode despite error. Press Ctrl+C to exit.');
+        
+        // Keep the process alive even on error
+        process.on('SIGINT', async () => {
+          logger.info('Received SIGINT, closing browser...');
+          if (upworkService) {
+            await upworkService.close();
+          }
+          await closeDatabase();
+          process.exit(0);
+        });
+        
+        // Keep the process running
+        await new Promise(() => {
+          // This promise never resolves, keeping the process alive
+        });
+      } else {
+        process.exit(1);
+      }
     }
   },
 });
