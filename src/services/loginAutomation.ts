@@ -137,6 +137,9 @@ export class LoginAutomation {
     try {
       logger.info('Entering email...');
 
+      // Wait for page to be fully loaded before input
+      await this.waitForPageReady();
+
       // Wait for email field with retry
       const emailField = await this.waitForSelectorWithRetry([
         '#login_username',
@@ -155,43 +158,67 @@ export class LoginAutomation {
         };
       }
 
-      // Clear and type email with human-like delays
-      await emailField.click();
-      await this.page.keyboard.down('Control');
-      await this.page.keyboard.press('KeyA');
-      await this.page.keyboard.up('Control');
-      await this.page.keyboard.press('Backspace');
+      // Focus the email field first
+      await emailField.focus();
+      await this.randomDelay(500, 1000); // Wait for focus to be established
       
+      // Clear the field if it has content
+      const currentValue = await emailField.evaluate((el: Element) => (el as HTMLInputElement).value);
+      if (currentValue) {
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.up('Control');
+        await this.page.keyboard.press('Backspace');
+        await this.randomDelay(200, 500);
+      }
+      
+      // Type email with human-like delays
       await this.typeHumanLike(this.user.email);
+      
+      // Verify the email was entered correctly
+      const enteredEmail = await emailField.evaluate((el: Element) => (el as HTMLInputElement).value);
+      if (enteredEmail !== this.user.email) {
+        logger.warn(`Email verification failed. Expected: ${this.user.email}, Got: ${enteredEmail}`);
+        
+        // Try to clear and retype
+        await emailField.focus();
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.up('Control');
+        await this.page.keyboard.press('Backspace');
+        await this.randomDelay(200, 500);
+        await this.typeHumanLike(this.user.email);
+        
+        // Verify again
+        const retryEmail = await emailField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (retryEmail !== this.user.email) {
+          return {
+            status: 'soft_fail',
+            stage: 'email',
+            error_code: 'EMAIL_ENTRY_FAILED',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: `Failed to enter email correctly. Expected: ${this.user.email}, Got: ${retryEmail}`,
+          };
+        }
+      }
+      
+      logger.info(`Email verified: ${enteredEmail}`);
       
       // Take screenshot after email is filled
       this.screenshots.email_filled = await this.takeScreenshot('email_filled');
 
-      // Click Continue button
-      const continueButton = await this.waitForSelectorWithRetry([
-        '#login_password_continue',
-        'button[button-role="continue"][target-form="username"]',
-        'button[type="submit"]',
-      ], 10000);
-
-      if (!continueButton) {
-        return {
-          status: 'soft_fail',
-          stage: 'email',
-          error_code: 'CONTINUE_BUTTON_NOT_FOUND',
-          screenshots: this.screenshots,
-          url: this.page.url(),
-        };
-      }
-
-      await continueButton.click();
+      // Press Enter to submit the email form
+      await this.page.keyboard.press('Enter');
       await this.randomDelay(1000, 2000);
 
       // Wait for either password form or error
-      const passwordField = await this.page.waitForSelector('#login_password', {
-        timeout: 10000,
-        visible: true,
-      }).catch(() => null);
+      const passwordField = await this.waitForSelectorWithRetry([
+        '#login_password',
+        '[aria-label*="Password"]',
+        'input[name="login[password]"]',
+        'input[type="password"]',
+      ], 10000);
 
       if (!passwordField) {
         // Check for inline error
@@ -241,6 +268,9 @@ export class LoginAutomation {
     try {
       logger.info('Entering password...');
 
+      // Wait for page to be fully loaded before input
+      await this.waitForPageReady();
+
       // Wait for password field
       const passwordField = await this.waitForSelectorWithRetry([
         '#login_password',
@@ -258,50 +288,69 @@ export class LoginAutomation {
         };
       }
 
-      // Type password (no logging)
-      await passwordField.click();
-      await this.page.keyboard.down('Control');
-      await this.page.keyboard.press('KeyA');
-      await this.page.keyboard.up('Control');
-      await this.page.keyboard.press('Backspace');
+      // Focus the password field first
+      await passwordField.focus();
+      await this.randomDelay(500, 1000); // Wait for focus to be established
       
+      // Clear the field if it has content
+      const currentValue = await passwordField.evaluate((el: Element) => (el as HTMLInputElement).value);
+      if (currentValue) {
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.up('Control');
+        await this.page.keyboard.press('Backspace');
+        await this.randomDelay(200, 500);
+      }
+      
+      // Type password with human-like delays (no logging)
       await this.typeHumanLike(this.user.password);
+      
+      // Verify the password was entered correctly (check length only for security)
+      const enteredPassword = await passwordField.evaluate((el: Element) => (el as HTMLInputElement).value);
+      if (enteredPassword.length !== this.user.password.length) {
+        logger.warn(`Password verification failed. Expected length: ${this.user.password.length}, Got length: ${enteredPassword.length}`);
+        
+        // Try to clear and retype
+        await passwordField.focus();
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.up('Control');
+        await this.page.keyboard.press('Backspace');
+        await this.randomDelay(200, 500);
+        await this.typeHumanLike(this.user.password);
+        
+        // Verify again
+        const retryPassword = await passwordField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (retryPassword.length !== this.user.password.length) {
+          return {
+            status: 'soft_fail',
+            stage: 'password',
+            error_code: 'PASSWORD_ENTRY_FAILED',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: `Failed to enter password correctly. Expected length: ${this.user.password.length}, Got length: ${retryPassword.length}`,
+          };
+        }
+      }
+      
+      logger.info(`Password verified: length ${enteredPassword.length}`);
       
       // Take screenshot after password is filled
       this.screenshots.password_filled = await this.takeScreenshot('password_filled');
 
-      // Click Log in button
-      const loginButton = await this.waitForSelectorWithRetry([
-        '#login_control_continue',
-        '[aria-label*="Log in"]',
-        'button[type="submit"]',
-      ], 10000);
-
-      if (!loginButton) {
-        return {
-          status: 'soft_fail',
-          stage: 'password',
-          error_code: 'LOGIN_BUTTON_NOT_FOUND',
-          screenshots: this.screenshots,
-          url: this.page.url(),
-        };
-      }
-
-      await loginButton.click();
+      // Press Enter to submit the password form
+      await this.page.keyboard.press('Enter');
       await this.randomDelay(2000, 3000);
 
-      // Wait for navigation or MFA/CAPTCHA
-      const result = await Promise.race([
-        this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).then(() => null),
-        this.detectMFAOrCaptcha(),
-        this.detectPasswordError(),
-      ]);
-
-      if (result) {
-        return result;
+      // Wait for navigation to complete
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
+        // Navigation timeout - check if we're already on the right page
+        logger.warn('Navigation timeout, checking current page');
       }
 
-      // Check if we reached create profile page
+      // Check if we reached create profile page first
       const currentUrl = this.page.url();
       if (currentUrl.includes('/nx/create-profile')) {
         this.screenshots.after_login = await this.takeScreenshot('after_login');
@@ -312,6 +361,17 @@ export class LoginAutomation {
           screenshots: this.screenshots,
           url: currentUrl,
         };
+      }
+
+      // If not on create profile page, check for errors
+      const mfaResult = await this.detectMFAOrCaptcha();
+      if (mfaResult) {
+        return mfaResult;
+      }
+
+      const passwordErrorResult = await this.detectPasswordError();
+      if (passwordErrorResult) {
+        return passwordErrorResult;
       }
 
       return {
@@ -434,34 +494,27 @@ export class LoginAutomation {
         };
       }
 
-      // Check for suspicious login indicators
-      const suspiciousText = await this.page.evaluate(() => {
-        const text = document.body.textContent?.toLowerCase() || '';
-        return text.includes('suspicious') || text.includes('verify') || text.includes('security');
-      });
+      // Check for suspicious login indicators (only if we're still on login page)
+      const currentUrl = this.page.url();
+      if (currentUrl.includes('/ab/account-security/login')) {
+        const suspiciousText = await this.page.evaluate(() => {
+          const text = document.body.textContent?.toLowerCase() || '';
+          return text.includes('suspicious') || text.includes('verify') || text.includes('security');
+        });
 
-      if (suspiciousText) {
-        // Wait for potential redirection (up to 10 seconds)
-        try {
-          await this.page.waitForNavigation({ 
-            waitUntil: 'networkidle2', 
-            timeout: 10000 
-          });
-        } catch (error) {
-          // No redirection occurred, continue
+        if (suspiciousText) {
+          // Take screenshot of the suspicious page
+          this.screenshots.suspicious_page = await this.takeScreenshot('suspicious_page');
+
+          return {
+            status: 'soft_fail',
+            stage: 'password',
+            error_code: 'SUSPICIOUS_LOGIN',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: 'Suspicious login indicators detected - user flagged for captcha',
+          };
         }
-
-        // Take screenshot of the final page after potential redirection
-        this.screenshots.suspicious_page = await this.takeScreenshot('suspicious_page');
-
-        return {
-          status: 'soft_fail',
-          stage: 'password',
-          error_code: 'SUSPICIOUS_LOGIN',
-          screenshots: this.screenshots,
-          url: this.page.url(),
-          evidence: 'Suspicious login indicators detected - user flagged for captcha',
-        };
       }
 
       return null;
@@ -515,6 +568,22 @@ export class LoginAutomation {
       }
     }
     return null;
+  }
+
+  private async waitForPageReady(): Promise<void> {
+    try {
+      // Wait for the page to be ready by checking if document is complete
+      await this.page.waitForFunction(
+        () => document.readyState === 'complete',
+        { timeout: 10000 }
+      );
+    } catch (error) {
+      // If that fails, just wait 1 second as minimum delay
+      logger.warn('Page ready state wait failed, using minimum delay');
+    }
+    
+    // Always add a minimum 1 second delay to ensure page is ready
+    await this.randomDelay(1000, 1500);
   }
 
   private async typeHumanLike(text: string): Promise<void> {

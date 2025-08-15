@@ -109,7 +109,7 @@ Run the complete login automation for pending users:
 npm start process-users
 
 # Process specific number of users
-npm start process-users --limit 10
+npm start process-users --limit 1
 
 # Run in headless mode
 npm start process-users --headless
