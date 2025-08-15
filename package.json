@@ -11,21 +11,27 @@
     "migrate": "tsx src/migrate.ts",
     "lint": "eslint src --ext .ts",
     "test": "jest",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d postgres",
+    "db:logs": "docker compose logs postgres",
+    "setup": "npm run db:up && sleep 5 && npm run migrate"
   },
   "dependencies": {
+    "cmd-ts": "^0.11.0",
+    "csv-parse": "^5.6.0",
+    "dotenv": "^16.3.1",
+    "kysely": "^0.25.0",
+    "pg": "^8.11.3",
+    "pino": "^8.17.2",
+    "pino-pretty": "^10.3.1",
     "puppeteer": "^22.1.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "puppeteer-extra-plugin-user-data-dir": "^2.4.1",
     "puppeteer-extra-plugin-user-preferences": "^2.4.1",
-    "kysely": "^0.25.0",
-    "pg": "^8.11.3",
-    "dotenv": "^16.3.1",
-    "pino": "^8.17.2",
-    "pino-pretty": "^10.3.1",
-    "zod": "^3.22.4",
-    "cmd-ts": "^0.11.0"
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

@@ -3,6 +3,7 @@ import { string, number, boolean } from 'cmd-ts';
 import { z } from 'zod';
 import dotenv from 'dotenv';
 import { getLogger } from './utils/logger.js';
+import { importUsersFromCsv } from './commands/importCsv.js';
 import { runMigrations } from './database/migrate.js';
 import { closeDatabase } from './database/connection.js';
 import { BrowserManager } from './browser/browserManager.js';
@@ -55,6 +56,26 @@ const visitLoginPageCmd = command({
       
     } catch (error) {
       logger.error(error, 'Failed to visit login page');
+      process.exit(1);
+    }
+  },
+});
+
+// Command to import users from CSV
+const importCsvCmd = command({
+  name: 'import-csv',
+  description: 'Import users from a CSV file',
+  args: {
+    file: option({ type: string, long: 'file', short: 'f', description: 'Path to CSV file' }),
+  },
+  handler: async (args) => {
+    try {
+      await runMigrations();
+      const result = await importUsersFromCsv({ file: args.file });
+      logger.info(result, 'CSV import completed');
+      await closeDatabase();
+    } catch (error) {
+      logger.error(error, 'Failed to import from CSV');
       process.exit(1);
     }
   },
@@ -247,6 +268,9 @@ switch (commandName) {
     break;
   case 'stats':
     await run(statsCmd, commandArgs);
+    break;
+  case 'import-csv':
+    await run(importCsvCmd, commandArgs);
     break;
   default:
     await run(mainCmd, process.argv.slice(2));

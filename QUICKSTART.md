@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Node.js 18+
-- PostgreSQL database
+- Docker and Docker Compose
 - Chrome/Chromium browser
 
 ## Setup
@@ -33,14 +33,19 @@
    UPWORK_LOGIN_URL=https://www.upwork.com/ab/account-security/login
    ```
 
-4. **Create database:**
-   ```sql
-   CREATE DATABASE up_crawler;
+4. **Start PostgreSQL with Docker:**
+   ```bash
+   npm run db:up
    ```
 
 5. **Run migrations:**
    ```bash
    npm run migrate
+   ```
+
+   **Or use the setup command to do both:**
+   ```bash
+   npm run setup
    ```
 
 ## Test the Login Page Visit
@@ -128,6 +133,17 @@ src/
 
 ## Troubleshooting
 
-- **Database connection errors**: Check your DATABASE_URL in .env
+- **Database connection errors**: 
+  - Check if Docker is running: `docker ps`
+  - Check database logs: `npm run db:logs`
+  - Restart database: `npm run db:reset`
 - **Browser launch issues**: Ensure Chrome/Chromium is installed
 - **Permission errors**: Check file permissions for user-data directory
+
+## Docker Commands
+
+- `npm run db:up` - Start PostgreSQL database
+- `npm run db:down` - Stop PostgreSQL database
+- `npm run db:reset` - Reset database (removes all data)
+- `npm run db:logs` - View database logs
+- `npm run setup` - Start database and run migrations

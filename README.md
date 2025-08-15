@@ -107,6 +107,39 @@ npm start add-user \
   --country-code "US"
 ```
 
+### Import Users from CSV (Database-Aligned Headers)
+Bulk-import users from a CSV/TSV file. The importer supports comma or tab delimiters and expects headers that match the database column names.
+
+Required headers (case-insensitive):
+- `first_name`
+- `last_name`
+- `email`
+- `password`
+- `country_code`
+
+Optional headers:
+- `attempt_count`
+- `last_attempt_at` (ISO 8601 date/time)
+- `last_error_code`
+- `last_error_message`
+- `success_at` (ISO 8601 date/time)
+
+Command:
+```bash
+npm start import-csv -- --file data/mock_users.csv
+```
+
+Behavior:
+- Skips rows missing any required fields
+- Skips users whose `email` already exists
+- If optional fields are provided, they will be applied after user creation
+
+Example (tab-delimited):
+```
+first_name	last_name	email	password	country_code	attempt_count	last_attempt_at	last_error_code	last_error_message	success_at
+Zoe	Bennett	zoe.bennet03@outlook.com	workhard2025!	SG	0				
+```
+
 ### Process Users
 Run the automation for pending users:
 
@@ -115,7 +148,7 @@ Run the automation for pending users:
 npm start process-users
 
 # Process specific number of users
-npm start process-users --limit 10
+npm start process-users --limit 1
 
 # Run in headless mode
 npm start process-users --headless
