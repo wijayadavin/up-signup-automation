@@ -292,21 +292,31 @@ Optional headers:
 - `last_error_code`
 - `last_error_message`
 - `success_at` (ISO 8601 date/time)
+- `captcha_flagged_at` (ISO 8601 date/time)
+- `location_street_address` (Street address for profile creation)
+- `location_city` (City for profile creation)
+- `location_state` (State/Province for profile creation)
+- `location_post_code` (ZIP/Postal code for profile creation)
 
 Command:
 ```bash
+# Import users (skips existing)
 npm start import-csv -- --file data/mock_users.csv
+
+# Force import (updates existing users)
+npm start import-csv -- --file data/mock_users.csv --force
 ```
 
 Behavior:
 - Skips rows missing any required fields
-- Skips users whose `email` already exists
+- Skips users whose `email` already exists (unless --force is used)
+- If --force is used, updates existing users with new location data
 - If optional fields are provided, they will be applied after user creation
 
 Example (tab-delimited):
 ```
-first_name	last_name	email	password	country_code	attempt_count	last_attempt_at	last_error_code	last_error_message	success_at
-Zoe	Bennett	zoe.bennet03@outlook.com	workhard2025!	SG	0				
+first_name	last_name	email	password	country_code	attempt_count	last_attempt_at	last_error_code	last_error_message	success_at	captcha_flagged_at	location_street_address	location_city	location_state	location_post_code
+Zoe	Bennett	zoe.bennet03@outlook.com	workhard2025!	SG	0												12 Orchard Road	Singapore	Central	238832
 ```
 
 ### Process Users
