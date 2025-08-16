@@ -376,26 +376,94 @@ const testProxyCmd = command({
         const page = await browserManager.newPage();
         logger.info('Testing proxy connection...');
         
-        await page.goto('https://httpbin.org/ip', {
-          waitUntil: 'networkidle2',
-          timeout: 30000,
-        });
+        // Try multiple IP check services
+        let ipInfo = null;
+        const ipServices = [
+          'https://httpbin.org/ip',
+          'https://api.ipify.org?format=json',
+          'https://ip.decodo.com/json'
+        ];
         
-        // Extract IP information from the page
-        const ipInfo = await page.evaluate(() => {
-          const pre = document.querySelector('pre');
-          if (pre) {
-            try {
-              return JSON.parse(pre.textContent || '{}');
-            } catch (e) {
-              return { error: 'Failed to parse IP info' };
+        for (const service of ipServices) {
+          try {
+            logger.info(`Trying IP service: ${service}`);
+            await page.goto(service, {
+              waitUntil: 'networkidle2',
+              timeout: 20000,
+            });
+            break; // If successful, exit loop
+          } catch (error) {
+            logger.warn(`Failed to load ${service}, trying next service...`);
+            if (service === ipServices[ipServices.length - 1]) {
+              throw error; // If last service fails, throw error
             }
           }
-          return { error: 'IP info not found' };
+        }
+        
+        // Wait for page to load and try multiple strategies to get IP
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Give page time to load
+        
+        // Extract IP information from the page with multiple fallbacks
+        ipInfo = await page.evaluate(() => {
+          // Strategy 1: Look for <pre> element (httpbin.org format)
+          const pre = document.querySelector('pre');
+          if (pre && pre.textContent) {
+            try {
+              const content = pre.textContent.trim();
+              console.log('Raw pre content:', content);
+              return JSON.parse(content);
+            } catch (e) {
+              console.log('Parse error for pre:', e);
+              return { source: 'pre', error: 'Failed to parse', content: pre.textContent };
+            }
+          }
+          
+          // Strategy 2: Look for JSON anywhere in the page
+          const bodyText = document.body.textContent || '';
+          
+          // Try different JSON patterns for different services
+          const jsonPatterns = [
+            /\{[^}]*"origin"[^}]*\}/,  // httpbin.org format
+            /\{[^}]*"ip"[^}]*\}/,      // ipify.org format
+            /\{[^}]*"country"[^}]*\}/ // decodo.com format
+          ];
+          
+          for (const pattern of jsonPatterns) {
+            const jsonMatch = bodyText.match(pattern);
+            if (jsonMatch) {
+              try {
+                console.log('Found JSON match:', jsonMatch[0]);
+                return JSON.parse(jsonMatch[0]);
+              } catch (e) {
+                console.log('Parse error for JSON match:', e);
+              }
+            }
+          }
+          
+          // Strategy 3: Look for IP pattern in text
+          const ipPattern = /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/;
+          const ipMatch = bodyText.match(ipPattern);
+          if (ipMatch) {
+            return { origin: ipMatch[0], source: 'pattern' };
+          }
+          
+          // Strategy 4: Return page content for debugging
+          return { 
+            error: 'No IP found', 
+            bodyContent: bodyText.substring(0, 500),
+            htmlContent: document.documentElement.innerHTML.substring(0, 500)
+          };
         });
         
-        logger.info('Successfully connected through proxy');
-        logger.info('IP Information:', ipInfo);
+        if (ipInfo.error) {
+          logger.error({ ipInfo }, 'Failed to extract IP information from proxy test');
+        } else {
+          logger.info('Successfully connected through proxy');
+          logger.info({ 
+            currentIP: ipInfo.origin || ipInfo.ip || 'unknown',
+            fullResponse: ipInfo 
+          }, 'Proxy IP Information');
+        }
         
         await page.close();
       } else {
@@ -406,7 +474,19 @@ const testProxyCmd = command({
       await browserManager.close();
       
     } catch (error) {
-      logger.error(error, 'Failed to test proxy configuration');
+      logger.error({ error: error instanceof Error ? error.message : error }, 'Failed to test proxy configuration');
+      
+      // Try to get more specific error information
+      if (error instanceof Error) {
+        if (error.message.includes('ERR_TUNNEL_CONNECTION_FAILED')) {
+          logger.error('Proxy connection failed - check proxy credentials and server');
+        } else if (error.message.includes('TimeoutError')) {
+          logger.error('Proxy test timed out - proxy server may be slow or unreachable');
+        } else if (error.message.includes('net::ERR_PROXY_AUTH_FAILED')) {
+          logger.error('Proxy authentication failed - check username and password');
+        }
+      }
+      
       process.exit(1);
     }
   },

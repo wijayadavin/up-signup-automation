@@ -550,17 +550,25 @@ export class LoginAutomation {
         // Add delay after clicking for UI to respond
         await this.randomDelay(2000, 3000);
 
-      // Wait for navigation
-      try {
-        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-      } catch (error) {
-        return {
-          status: 'soft_fail',
-          stage: 'create_profile',
-          error_code: 'NAVIGATION_TIMEOUT',
-          screenshots: this.screenshots,
-          url: this.page.url(),
-        };
+        // Wait for navigation to experience page
+        try {
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (error) {
+          // Check if we're already on the experience page
+          const currentUrl = this.page.url();
+          if (!currentUrl.includes('/nx/create-profile/experience')) {
+            logger.error('Navigation timeout and not on experience page:', currentUrl);
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'NAVIGATION_TIMEOUT',
+              screenshots: this.screenshots,
+              url: currentUrl,
+              evidence: `Failed to navigate to experience page after clicking Get started. Current URL: ${currentUrl}`,
+            };
+          } else {
+            logger.info('Navigation timeout but already on experience page, continuing...');
+          }
         }
       }
 
@@ -663,44 +671,128 @@ export class LoginAutomation {
       await this.randomDelay(1000, 2000);
 
       // Click Next button
+      logger.info('Looking for Next button on experience page...');
+      await this.takeScreenshot('experience_before_next_button');
+      
       const nextButton = await this.waitForSelectorWithRetry([
-        '[role="button"][aria-label*="Next"]',
         '[data-test="next-button"]',
         'button[data-ev-label="wizard_next"]',
+        'button[data-test="next-button"]',
+        '.air3-btn-primary',
+        '[role="button"][aria-label*="Next"]',
         'button:contains("Next")',
-      ], 10000);
+      ], 15000);
+
+      let buttonClicked = false;
 
       if (!nextButton) {
-        return {
-          status: 'soft_fail',
-          stage: 'create_profile',
-          error_code: 'EXPERIENCE_NEXT_NOT_FOUND',
-          screenshots: this.screenshots,
-          url: currentUrl,
-          evidence: 'Next button not found on experience page',
-        };
+        logger.warn('CSS selectors failed for Next button, trying text-based search...');
+        const allButtons = await this.page.$$('button');
+        for (const button of allButtons) {
+          const text = await button.evaluate(el => el.textContent?.toLowerCase().trim() || '');
+          const dataTest = await button.evaluate(el => el.getAttribute('data-test') || '');
+          const dataEvLabel = await button.evaluate(el => el.getAttribute('data-ev-label') || '');
+          
+          if (text.includes('next') || dataTest === 'next-button' || dataEvLabel === 'wizard_next') {
+            logger.info(`Found Next button via search: text="${text}", data-test="${dataTest}", data-ev-label="${dataEvLabel}"`);
+            await button.evaluate((el: Element) => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+            await this.randomDelay(1000, 1500);
+            await button.click();
+            logger.info('Successfully clicked Next button via search');
+            buttonClicked = true;
+            break;
+          }
+        }
+      } else {
+        logger.info('Found Next button via CSS selector');
+        await nextButton.evaluate((el: Element) => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+        await this.randomDelay(1000, 1500);
+        await nextButton.click();
+        logger.info('Successfully clicked Next button');
+        buttonClicked = true;
       }
 
-      this.screenshots.experience_after = await this.takeScreenshot('experience_after');
-      await nextButton.click();
-      await this.randomDelay(2000, 3000);
-
-      // Wait for navigation to goal page
-      try {
-        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-      } catch (error) {
-        // Check if we're already on the goal page
-        const newUrl = this.page.url();
-        if (!newUrl.includes('/nx/create-profile/goal')) {
+      if (!buttonClicked) {
+        logger.warn('Next button not found on experience page, trying URL navigation fallback...');
+        
+        // Fallback: Navigate directly to next URL in sequence
+        const nextUrl = this.getNextStepUrl(currentUrl);
+        if (nextUrl) {
+          logger.info(`Navigating directly to next step: ${nextUrl}`);
+          
+          try {
+            await this.page.goto(nextUrl, {
+              waitUntil: 'networkidle2',
+              timeout: 15000,
+            });
+            
+            // Verify we reached the expected page
+            const newUrl = this.page.url();
+            const expectedPath = nextUrl.split('/nx/create-profile')[1]; // Extract the path part
+            
+            if (newUrl.includes(expectedPath)) {
+              logger.info(`Successfully navigated to ${expectedPath} via URL fallback`);
+              buttonClicked = true; // Mark as successful
+            } else {
+              logger.error(`URL fallback failed: expected ${expectedPath} but got ${newUrl}`);
+              return {
+                status: 'soft_fail',
+                stage: 'create_profile',
+                error_code: 'EXPERIENCE_NAVIGATION_FALLBACK_FAILED',
+                screenshots: this.screenshots,
+                url: newUrl,
+                evidence: `Failed to navigate to next step via URL. Expected: ${nextUrl}, Got: ${newUrl}`,
+              };
+            }
+          } catch (error) {
+            logger.error('URL navigation fallback failed:', error);
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'EXPERIENCE_NAVIGATION_FAILED',
+              screenshots: this.screenshots,
+              url: currentUrl,
+              evidence: `Both button click and URL navigation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            };
+          }
+        } else {
+          logger.error('No next URL found in sequence for current page');
           return {
             status: 'soft_fail',
             stage: 'create_profile',
-            error_code: 'EXPERIENCE_NAVIGATION_FAILED',
+            error_code: 'EXPERIENCE_NEXT_NOT_FOUND',
             screenshots: this.screenshots,
-            url: newUrl,
-            evidence: 'Failed to navigate to goal page',
+            url: currentUrl,
+            evidence: 'Could not locate Next button and no next URL available in sequence',
           };
         }
+      }
+
+      this.screenshots.experience_after = await this.takeScreenshot('experience_after');
+      await this.randomDelay(2000, 3000);
+
+      // Only wait for navigation if we used button click (not URL fallback)
+      const finalUrl = this.page.url();
+      if (!finalUrl.includes('/nx/create-profile/goal')) {
+        logger.warn('Not on goal page yet, waiting for navigation...');
+        try {
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (error) {
+          // Check if we're on the goal page now
+          const newUrl = this.page.url();
+          if (!newUrl.includes('/nx/create-profile/goal')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'EXPERIENCE_NAVIGATION_FAILED',
+              screenshots: this.screenshots,
+              url: newUrl,
+              evidence: 'Failed to navigate to goal page after button click',
+            };
+          }
+        }
+      } else {
+        logger.info('Already on goal page (via URL fallback or button click)');
       }
 
       logger.info('Experience step completed successfully');
@@ -1003,32 +1095,69 @@ export class LoginAutomation {
     try {
       logger.info('Handling resume import step...');
 
-      // Assert current route
+      // Assert current route or try to navigate to the correct page
       const currentUrl = this.page.url();
       if (!currentUrl.includes('/nx/create-profile/resume-import')) {
-        // Check for landmark element as fallback
+        logger.warn(`Not on resume import page (${currentUrl}), trying to navigate...`);
+        
+        // Try URL fallback navigation
+        const nextUrl = this.getNextStepUrl(currentUrl);
+        if (nextUrl && nextUrl.includes('/resume-import')) {
+          logger.info(`Navigating directly to resume import page: ${nextUrl}`);
+          
+          try {
+            await this.page.goto(nextUrl, {
+              waitUntil: 'networkidle2',
+              timeout: 15000,
+            });
+            
+            const newUrl = this.page.url();
+            if (!newUrl.includes('/resume-import')) {
+              logger.error(`URL navigation failed: expected resume-import but got ${newUrl}`);
+              // Continue anyway and try to handle the current page
+            } else {
+              logger.info('Successfully navigated to resume import page');
+            }
+          } catch (error) {
+            logger.warn('URL navigation failed, trying to handle current page:', error);
+            // Continue anyway and try to handle the current page
+          }
+        }
+        
+        // Check for page content as fallback
         const heading = await this.page.$('h1, h2, [role="heading"]');
         if (heading) {
           const headingText = await heading.evaluate(el => el.textContent?.toLowerCase() || '');
-          if (!headingText.includes('add your resume') && !headingText.includes('let\'s build your profile')) {
-            return {
-              status: 'soft_fail',
-              stage: 'create_profile',
-              error_code: 'RESUME_IMPORT_PAGE_NOT_FOUND',
-              screenshots: this.screenshots,
-              url: currentUrl,
-              evidence: `Expected resume import page, got ${currentUrl}`,
-            };
+          logger.info(`Page heading detected: "${headingText}"`);
+          
+          // Check if this looks like a goal/work preference page that we can skip
+          if (headingText.includes('how would you like to work') || headingText.includes('and how would you like to work')) {
+            logger.info('Detected goal/work preference page, looking for Next button to continue...');
+            
+            // Try to find and click Next button to progress
+            const nextButton = await this.waitForSelectorWithRetry([
+              'button:contains("Next")',
+              '[data-qa="next-btn"]',
+              '.air3-btn-primary',
+              'button[type="submit"]',
+            ], 10000);
+            
+            if (nextButton) {
+              logger.info('Found Next button, clicking to continue...');
+              await nextButton.click();
+              await this.randomDelay(2000, 3000);
+              
+              // Wait for navigation
+              try {
+                await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+                logger.info('Navigation completed, continuing with resume import logic...');
+              } catch (error) {
+                logger.warn('Navigation timeout, continuing anyway...');
+              }
+            } else {
+              logger.warn('No Next button found on goal/work preference page');
+            }
           }
-        } else {
-          return {
-            status: 'soft_fail',
-            stage: 'create_profile',
-            error_code: 'RESUME_IMPORT_PAGE_NOT_FOUND',
-            screenshots: this.screenshots,
-            url: currentUrl,
-            evidence: `Expected resume import page, got ${currentUrl}`,
-          };
         }
       }
 
@@ -1157,6 +1286,46 @@ export class LoginAutomation {
     }
   }
 
+  private getStepIndex(stepName: string): number {
+    const steps = ['experience', 'goal', 'work_preference', 'resume_import', 'education', 'languages', 'skills', 'overview', 'rate', 'location', 'general', 'categories', 'skills_selection', 'title', 'employment'];
+    const index = steps.indexOf(stepName);
+    return index >= 0 ? index : 0; // Default to first step if not found
+  }
+
+  private getNextStepUrl(currentUrl: string): string | null {
+    // Define the URL progression sequence based on your provided order
+    const urlSequence = [
+      '/nx/create-profile/experience',
+      '/nx/create-profile/goal',
+      '/nx/create-profile/work-preference',
+      '/nx/create-profile/resume-import',
+      '/nx/create-profile/categories',
+      '/nx/create-profile/skills',
+      '/nx/create-profile/title',
+      '/nx/create-profile/employment',
+      '/nx/create-profile/education',
+      '/nx/create-profile/languages',
+      '/nx/create-profile/location'
+    ];
+
+    // Find current step in sequence
+    const currentStep = urlSequence.find(step => currentUrl.includes(step));
+    if (!currentStep) {
+      return null;
+    }
+
+    // Get index of current step
+    const currentIndex = urlSequence.indexOf(currentStep);
+    
+    // Return next step URL, or null if this is the last step
+    if (currentIndex >= 0 && currentIndex < urlSequence.length - 1) {
+      const baseUrl = currentUrl.split('/nx/create-profile')[0];
+      return baseUrl + urlSequence[currentIndex + 1];
+    }
+
+    return null; // Last step or not found
+  }
+
   private async resumeProfileCreation(): Promise<LoginResult> {
     try {
       // Get current URL after potential navigation
@@ -1165,100 +1334,89 @@ export class LoginAutomation {
       
       logger.info({ currentUrl, currentStep }, 'Resuming profile creation from step');
 
-      // Handle each step based on current URL
-      switch (currentStep) {
-        case 'experience':
-          return await this.handleExperienceStep();
-          
-        case 'goal':
-          return await this.handleGoalStep();
-          
-        case 'work_preference':
-          return await this.handleWorkPreferenceStep();
-          
-        case 'resume_import':
-          return await this.handleResumeImportStep();
-          
-        case 'education':
-          return await this.handleEducationStep();
-          
-        case 'languages':
-          return await this.handleLanguagesStep();
-          
-        case 'skills':
-          return await this.handleSkillsStep();
-          
-        case 'overview':
-          return await this.handleOverviewStep();
-          
-        case 'rate':
-          return await this.handleRateStep();
-          
-        case 'location':
-          return await this.handleLocationStep();
-          
-        case 'general':
-          return await this.handleGeneralStep();
-          
-        default:
-          // If we're on an unknown step, try to continue with the normal flow
-          logger.warn({ currentStep, currentUrl }, 'Unknown profile step, attempting normal flow');
-          
-          // Try to handle experience step first
-          const experienceResult = await this.handleExperienceStep();
-          if (experienceResult.status !== 'success') {
-            return experienceResult;
-          }
-
-          // Continue with remaining steps
-          const goalResult = await this.handleGoalStep();
-          if (goalResult.status !== 'success') {
-            return goalResult;
-          }
-
-          const workPrefResult = await this.handleWorkPreferenceStep();
-          if (workPrefResult.status !== 'success') {
-            return workPrefResult;
-          }
-
-          const resumeResult = await this.handleResumeImportStep();
-          if (resumeResult.status !== 'success') {
-            return resumeResult;
-          }
-
-          const educationResult = await this.handleEducationStep();
-          if (educationResult.status !== 'success') {
-            return educationResult;
-          }
-
-          const languagesResult = await this.handleLanguagesStep();
-          if (languagesResult.status !== 'success') {
-            return languagesResult;
-          }
-
-          const overviewResult = await this.handleOverviewStep();
-          if (overviewResult.status !== 'success') {
-            return overviewResult;
-          }
-
-          const rateResult = await this.handleRateStep();
-          if (rateResult.status !== 'success') {
-            return rateResult;
-          }
-
-          const locationResult = await this.handleLocationStep();
-          if (locationResult.status !== 'success') {
-            return locationResult;
-          }
-
-          logger.info('Successfully completed all create profile steps');
+      // Handle steps sequentially starting from current step
+      let currentStepIndex = this.getStepIndex(currentStep);
+      const steps = ['experience', 'goal', 'work_preference', 'resume_import', 'education', 'languages', 'skills', 'overview', 'rate', 'location', 'general', 'categories', 'skills_selection', 'title', 'employment'];
+      
+      // Execute remaining steps in order
+      for (let i = currentStepIndex; i < steps.length; i++) {
+        const stepName = steps[i];
+        let stepResult: LoginResult;
+        
+        switch (stepName) {
+          case 'experience':
+            stepResult = await this.handleExperienceStep();
+            break;
+          case 'goal':
+            stepResult = await this.handleGoalStep();
+            break;
+          case 'work_preference':
+            stepResult = await this.handleWorkPreferenceStep();
+            break;
+          case 'resume_import':
+            stepResult = await this.handleResumeImportStep();
+            break;
+          case 'education':
+            stepResult = await this.handleEducationStep();
+            break;
+          case 'languages':
+            stepResult = await this.handleLanguagesStep();
+            break;
+          case 'skills':
+            stepResult = await this.handleSkillsStep();
+            break;
+          case 'overview':
+            stepResult = await this.handleOverviewStep();
+            break;
+          case 'rate':
+            stepResult = await this.handleRateStep();
+            break;
+          case 'location':
+            stepResult = await this.handleLocationStep();
+            break;
+          case 'general':
+            stepResult = await this.handleGeneralStep();
+            break;
+          case 'categories':
+            stepResult = await this.handleCategoriesStep();
+            break;
+          case 'skills_selection':
+            stepResult = await this.handleSkillsSelectionStep();
+            break;
+          case 'title':
+            stepResult = await this.handleTitleStep();
+            break;
+          case 'employment':
+            stepResult = await this.handleEmploymentStep();
+            break;
+          default:
+            logger.warn(`Unknown step: ${stepName}`);
+            continue;
+        }
+        
+        // Check if step failed
+        if (stepResult.status !== 'success') {
+          return stepResult;
+        }
+        
+        // If this was the employment step and it succeeded, we're done
+        if (stepName === 'employment' && stepResult.status === 'success') {
+          return {
+            status: 'success',
+            stage: 'done',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+          };
+        }
+      }
+      
+      // If we completed all steps successfully
       return {
         status: 'success',
         stage: 'done',
         screenshots: this.screenshots,
         url: this.page.url(),
       };
-      }
     } catch (error) {
       return {
         status: 'soft_fail',
