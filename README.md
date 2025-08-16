@@ -82,10 +82,28 @@ npm run migrate
 
 ## Usage
 
+### Run docker compose
+From the project root directory, run:
+```bash
+docker compose up -d
+```
+
+
 ### Build the project
 ```bash
 npm run build
 ```
+
+### Available Commands
+
+The application provides several commands for different operations:
+
+- **`visit-login`**: Test basic functionality by visiting the Upwork login page
+- **`add-user`**: Add individual users to the database
+- **`process-users`**: Run complete login automation for pending users
+- **`stats`**: View application statistics and user status
+- **`test-proxy`**: Test proxy configuration and verify IP details
+- **`import-csv`**: Bulk import users from CSV/TSV files
 
 ### Visit Login Page
 Test the basic functionality by visiting the Upwork login page:
@@ -297,6 +315,12 @@ Optional headers:
 - `location_city` (City for profile creation)
 - `location_state` (State/Province for profile creation)
 - `location_post_code` (ZIP/Postal code for profile creation)
+- `birth_date` (Date of birth in YYYY-MM-DD format for profile creation)
+
+**Enhanced Typing System**: The automation includes specialized methods for different field types:
+- **Combobox/Autocomplete Fields**: Handles dropdown selection with proper timing and validation
+- **Date Fields**: Slow, deliberate typing with Tab navigation for validation
+- **Standard Fields**: Robust verification with automatic retry logic
 
 Command:
 ```bash
@@ -310,13 +334,13 @@ npm start import-csv -- --file data/mock_users.csv --force
 Behavior:
 - Skips rows missing any required fields
 - Skips users whose `email` already exists (unless --force is used)
-- If --force is used, updates existing users with new location data
+- If --force is used, updates existing users with new data
 - If optional fields are provided, they will be applied after user creation
 
 Example (tab-delimited):
 ```
-first_name	last_name	email	password	country_code	attempt_count	last_attempt_at	last_error_code	last_error_message	success_at	captcha_flagged_at	location_street_address	location_city	location_state	location_post_code
-Zoe	Bennett	zoe.bennet03@outlook.com	workhard2025!	SG	0												12 Orchard Road	Singapore	Central	238832
+first_name	last_name	email	password	country_code	attempt_count	last_attempt_at	last_error_code	last_error_message	success_at	captcha_flagged_at	location_street_address	location_city	location_state	location_post_code	birth_date
+Zoe	Bennett	zoe.bennet03@outlook.com	workhard2025!	US	0												1200 Market St	San Francisco	California	94102	2003-04-30
 ```
 
 ### Process Users
@@ -338,6 +362,41 @@ Check the current status:
 
 ```bash
 npm start stats
+```
+
+### Test Proxy Configuration
+Test your proxy configuration and verify IP details:
+
+```bash
+# Test proxy in visible mode (default)
+npm start test-proxy
+
+# Test proxy in headless mode
+npm start test-proxy --headless
+```
+
+This command will:
+- **Load Proxy Configuration**: Automatically load proxy settings from environment variables
+- **Display Proxy Info**: Show proxy host, port, country, and rotation settings
+- **Test Connection**: Visit httpbin.org/ip to verify proxy connection
+- **Show IP Details**: Display the IP address and location information
+- **Validate Setup**: Confirm that the proxy is working correctly
+
+**Example Output:**
+```
+[INFO] Testing proxy configuration...
+[INFO] Decodo proxy configuration detected
+[INFO] { proxyHost: "us.decodo.com", proxyPort: 10000, proxyCountry: "us", proxyZipCode: "94102", proxyRotateMinutes: 10, proxyUsername: "user-spcecpm8t1-country-us-zip-94102" }
+[INFO] Testing proxy connection...
+[INFO] Successfully connected through proxy
+[INFO] Page content: <!DOCTYPE html>
+<html>
+<head>
+    <title>httpbin.org</title>
+    ...
+    "origin": "203.45.67.89"
+    ...
+</html>
 ```
 
 ## Development
@@ -396,6 +455,40 @@ src/
 - `PUPPETEER_USER_DATA_DIR`: Chrome user data directory
 - `UPWORK_LOGIN_URL`: Upwork login page URL
 
+### Proxy Configuration (Decodo)
+
+The application supports residential proxy configuration using Decodo proxy service:
+
+```env
+# Residential Proxy Configuration (Decodo)
+PROXY_HOST=us.decodo.com        # country.decodo.com format (e.g., us.decodo.com)
+PROXY_PORT=10000                # Decodo default port
+PROXY_USER=user-spcecpm8t1      # your session ID (without country/zip flags)
+PROXY_PASS=your_password        # your proxy password
+PROXY_COUNTRY=us                # country code (e.g., us|uk|sg|ua)
+PROXY_ZIP_CODE=94102            # zip code for location targeting
+PROXY_ROTATE_MINUTES=10         # sticky duration per run (set by you)
+```
+
+**Username Format:**
+The application automatically constructs the full username in the format:
+- With country and zip: `user-{session}-country-{country}-zip-{zip}`
+- With country only: `user-{session}-country-{country}`
+- Example: `user-spcecpm8t1-country-us-zip-94102`
+
+**Proxy Features:**
+- **Automatic Configuration**: Proxy settings are automatically loaded from environment variables
+- **Authentication**: Automatic proxy authentication for each browser session
+- **Country Selection**: Specify target country for residential IPs
+- **Session Management**: Sticky sessions with configurable duration
+- **Fallback Support**: Gracefully falls back to direct connection if proxy is not configured
+
+**Proxy Benefits:**
+- **IP Rotation**: Avoid IP-based rate limiting and blocking
+- **Geographic Targeting**: Use IPs from specific countries
+- **Residential IPs**: Higher success rates with residential proxy IPs
+- **Session Persistence**: Maintain consistent IP during automation sessions
+
 ### Browser Configuration
 
 The browser is configured with stealth plugins to avoid detection:
@@ -444,6 +537,52 @@ Screenshots are automatically saved to the `./screenshots/` directory for debugg
 - Use proxies for production use
 - The automation includes anti-detection measures but may still trigger security systems
 - Monitor for account suspensions and adjust automation patterns accordingly
+
+## Proxy Troubleshooting
+
+### Common Issues and Solutions
+
+**1. Proxy Connection Failed**
+```bash
+# Test proxy configuration
+npm start test-proxy
+```
+- Verify proxy credentials are correct
+- Check if proxy service is active
+- Ensure firewall allows proxy connections
+
+**2. IP Not Rotating**
+- Check `PROXY_ROTATE_MINUTES` setting
+- Verify country code is supported by your proxy provider
+- Contact proxy provider for session management issues
+
+**3. Slow Connection**
+- Try different proxy servers from your provider
+- Check your internet connection
+- Consider using proxies closer to your target location
+
+**4. Authentication Errors**
+- Verify `PROXY_USER` and `PROXY_PASS` are correct
+- Check if username includes required flags (e.g., country codes)
+- Ensure account has sufficient credits/bandwidth
+
+### Best Practices
+
+**Proxy Configuration:**
+- Use residential proxies for better success rates
+- Rotate IPs frequently to avoid detection
+- Use proxies from the same country as your target users
+- Monitor proxy performance and switch providers if needed
+
+**Rate Limiting:**
+- Implement delays between automation runs
+- Use different proxy sessions for different users
+- Monitor for IP blocks and adjust patterns accordingly
+
+**Session Management:**
+- Keep sessions short to avoid IP reputation issues
+- Use sticky sessions for multi-step processes
+- Clear browser data between sessions
 
 ## Disclaimer
 

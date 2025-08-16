@@ -175,6 +175,46 @@ export class UserService {
     }
   }
 
+  async updateUserBirthDate(id: number, birthDate: Date): Promise<User> {
+    try {
+      const [user] = await this.db
+        .updateTable('users')
+        .set({
+          birth_date: birthDate,
+          updated_at: new Date(),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .execute();
+
+      logger.info({ userId: id, birthDate }, 'User birth date updated');
+      return user;
+    } catch (error) {
+      logger.error(error, 'Failed to update user birth date');
+      throw error;
+    }
+  }
+
+  async updateUserCountryCode(id: number, countryCode: string): Promise<User> {
+    try {
+      const [user] = await this.db
+        .updateTable('users')
+        .set({
+          country_code: countryCode,
+          updated_at: new Date(),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .execute();
+
+      logger.info({ userId: id, countryCode }, 'User country code updated');
+      return user;
+    } catch (error) {
+      logger.error(error, 'Failed to update user country code');
+      throw error;
+    }
+  }
+
   async getAllUsers(): Promise<User[]> {
     try {
       const users = await this.db

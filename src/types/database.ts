@@ -28,6 +28,7 @@ export interface UsersTable {
   location_city: string | null;
   location_state: string | null;
   location_post_code: string | null;
+  birth_date: Date | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
@@ -49,6 +50,7 @@ export interface User {
   location_city: string | null;
   location_state: string | null;
   location_post_code: string | null;
+  birth_date: Date | null;
   created_at: Date;
   updated_at: Date;
 }

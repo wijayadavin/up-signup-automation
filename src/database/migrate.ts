@@ -3,13 +3,15 @@ import { getLogger } from '../utils/logger.js';
 import * as migration001 from './migrations/001_create_users_table.js';
 import * as migration002 from './migrations/002_add_captcha_flagged_at.js';
 import * as migration003 from './migrations/003_add_location_columns.js';
+import * as migration004 from './migrations/004_add_birth_date.js';
 
 const logger = getLogger(import.meta.url);
 
 const migrations = [
   { name: '001_create_users_table', up: migration001.up, down: migration001.down },
   { name: '002_add_captcha_flagged_at', up: migration002.up, down: migration002.down },
-  { name: '003_add_location_columns', up: migration003.up, down: migration003.down }
+  { name: '003_add_location_columns', up: migration003.up, down: migration003.down },
+  { name: '004_add_birth_date', up: migration004.up, down: migration004.down }
 ];
 
 export async function runMigrations(): Promise<void> {

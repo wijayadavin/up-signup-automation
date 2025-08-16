@@ -39,6 +39,9 @@ export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ impo
 		const locationCity = record['location_city'] ?? null;
 		const locationState = record['location_state'] ?? null;
 		const locationPostCode = record['location_post_code'] ?? null;
+		
+		// Birth date field
+		const birthDateStr = record['birth_date'] ?? null;
 
 		if (!firstName || !lastName || !email || !password) {
 			logger.warn({ email }, 'Skipping row: missing required fields');
@@ -57,6 +60,20 @@ export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ impo
 					location_state: locationState,
 					location_post_code: locationPostCode,
 				});
+				
+				// Update country code if provided
+				if (countryCode) {
+					await userService.updateUserCountryCode(existing.id, countryCode);
+				}
+				
+				// Update birth date if provided
+				if (birthDateStr) {
+					const birthDate = new Date(birthDateStr);
+					if (!isNaN(birthDate.getTime())) {
+						await userService.updateUserBirthDate(existing.id, birthDate);
+					}
+				}
+				
 				imported++;
 				continue;
 			} else {
@@ -102,6 +119,14 @@ export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ impo
 				location_state: locationState,
 				location_post_code: locationPostCode,
 			});
+		}
+
+		// Update birth date if provided
+		if (birthDateStr) {
+			const birthDate = new Date(birthDateStr);
+			if (!isNaN(birthDate.getTime())) {
+				await userService.updateUserBirthDate(created.id, birthDate);
+			}
 		}
 		imported++;
 	}

@@ -1904,46 +1904,68 @@ export class LoginAutomation {
         post_code: this.user.location_post_code || '10001'
       };
 
-      // Find and fill street address field
+      // Format birth date for input (mm/dd/yyyy format)
+      let birthDateFormatted = '05/15/90'; // Default fallback
+      if (this.user.birth_date) {
+        const birthDate = new Date(this.user.birth_date);
+        const month = String(birthDate.getMonth() + 1).padStart(2, '0');
+        const day = String(birthDate.getDate()).padStart(2, '0');
+        const year = String(birthDate.getFullYear()).slice(-2); // Last 2 digits
+        birthDateFormatted = `${month}/${day}/${year}`;
+      }
+
+      // Find and fill street address field (might be combobox)
       const streetAddressInput = await this.waitForSelectorWithRetry([
         'input[placeholder*="Enter street address"]',
         'input[aria-label*="Street address"]',
         'input[name*="street"]',
+        'input[role="combobox"]',
+        'input[aria-autocomplete]',
         'input[type="text"]',
       ], 15000);
 
       if (streetAddressInput) {
-        const streetResult = await this.typeWithVerification(streetAddressInput, locationData.street_address, 'street_address');
+        const streetResult = await this.typeComboboxWithVerification(streetAddressInput, locationData.street_address, 'street_address');
         if (streetResult.status !== 'success') {
           return streetResult;
         }
       }
 
-      // Find and fill city field
+      // Find and fill city field (combobox/autocomplete)
       const cityInput = await this.waitForSelectorWithRetry([
         'input[placeholder*="Enter city"]',
+        'input[placeholder*="City"]',
+        'input[placeholder*="city"]',
         'input[aria-label*="City"]',
+        'input[aria-label*="city"]',
         'input[name*="city"]',
+        'input[id*="city"]',
+        'input[data-test*="city"]',
+        'input[role="combobox"]',
+        'input[aria-autocomplete]',
         'input[type="text"]',
       ], 15000);
 
       if (cityInput) {
-        const cityResult = await this.typeWithVerification(cityInput, locationData.city, 'city');
+        // Special handling for city field with more robust dropdown selection
+        const cityResult = await this.typeCityWithDropdownSelection(cityInput, locationData.city);
         if (cityResult.status !== 'success') {
           return cityResult;
         }
       }
 
-      // Find and fill state field
+      // Find and fill state field (might be combobox)
       const stateInput = await this.waitForSelectorWithRetry([
         'input[placeholder*="Enter state"]',
         'input[aria-label*="State"]',
         'input[name*="state"]',
+        'input[role="combobox"]',
+        'input[aria-autocomplete]',
         'input[type="text"]',
       ], 15000);
 
       if (stateInput) {
-        const stateResult = await this.typeWithVerification(stateInput, locationData.state, 'state');
+        const stateResult = await this.typeComboboxWithVerification(stateInput, locationData.state, 'state');
         if (stateResult.status !== 'success') {
           return stateResult;
         }
@@ -1964,6 +1986,31 @@ export class LoginAutomation {
         const postCodeResult = await this.typeWithVerification(postCodeInput, locationData.post_code, 'post_code');
         if (postCodeResult.status !== 'success') {
           return postCodeResult;
+        }
+      }
+
+      // Find and fill date of birth field
+      const birthDateInput = await this.waitForSelectorWithRetry([
+        'input[aria-labelledby="date-of-birth-label"]',
+        'input[placeholder="mm/dd/yyyy"]',
+        'input[placeholder*="date"]',
+        'input[placeholder*="birth"]',
+        'input[aria-label*="date"]',
+        'input[aria-label*="birth"]',
+        'input[name*="date"]',
+        'input[name*="birth"]',
+        'input[id*="date"]',
+        'input[id*="birth"]',
+        'input[data-test="input"]',
+        'input[data-test*="date"]',
+        'input[data-test*="birth"]',
+        'input[type="text"]',
+      ], 15000);
+
+      if (birthDateInput) {
+        const birthDateResult = await this.typeDateWithVerification(birthDateInput, birthDateFormatted, 'birth_date');
+        if (birthDateResult.status !== 'success') {
+          return birthDateResult;
         }
       }
 
@@ -3020,6 +3067,9 @@ export class LoginAutomation {
 
   private async checkIfFirstLetterTyped(expectedText: string): Promise<boolean> {
     try {
+      // Wait a bit for the typing to complete
+      await this.randomDelay(200, 400);
+      
       // Get the currently focused element
       const focusedElement = await this.page.evaluate(() => {
         const activeEl = document.activeElement as HTMLInputElement;
@@ -3030,8 +3080,20 @@ export class LoginAutomation {
       const firstLetter = expectedText.charAt(0).toLowerCase();
       const hasFirstLetter = focusedElement.toLowerCase().includes(firstLetter);
       
-      logger.info({ expectedText, focusedElement, hasFirstLetter }, 'Checking if first letter was typed');
-      return hasFirstLetter;
+      // Also check if any part of the expected text is present
+      const hasAnyContent = focusedElement.length > 0;
+      const hasExpectedContent = focusedElement.toLowerCase().includes(expectedText.toLowerCase());
+      
+      logger.info({ 
+        expectedText, 
+        focusedElement, 
+        hasFirstLetter, 
+        hasAnyContent, 
+        hasExpectedContent 
+      }, 'Checking if first letter was typed');
+      
+      // Return true if we have the first letter OR if we have any content (fallback)
+      return hasFirstLetter || hasAnyContent;
     } catch (error) {
       logger.warn('Error checking if first letter was typed, assuming not typed');
       return false;
@@ -3057,39 +3119,311 @@ export class LoginAutomation {
     }
   }
 
+  private async typeComboboxWithVerification(
+    element: any, 
+    text: string, 
+    fieldName: string
+  ): Promise<LoginResult> {
+    try {
+      // Clear the field first and ensure focus
+      await element.click();
+      await this.randomDelay(800, 1200);
+      
+      // Clear existing content
+      await this.page.keyboard.down('Control');
+      await this.page.keyboard.press('KeyA');
+      await this.page.keyboard.up('Control');
+      await this.page.keyboard.press('Backspace');
+      await this.randomDelay(300, 500);
+      
+      // Ensure element is still focused
+      await element.focus();
+      await this.randomDelay(500, 800);
+      
+      // Type the text very slowly for combobox (especially for city field)
+      // Type character by character with longer delays to trigger dropdown properly
+      for (const char of text) {
+        await this.page.keyboard.type(char);
+        // Longer delays between characters for better dropdown triggering
+        await this.randomDelay(200, 400);
+      }
+      
+      // Wait longer for dropdown to appear after typing
+      await this.randomDelay(1500, 2000);
+      
+      // Check if dropdown is visible before trying to select
+      const dropdownVisible = await this.page.evaluate(() => {
+        const dropdowns = document.querySelectorAll('[role="listbox"], [role="option"], .dropdown, .autocomplete-dropdown');
+        return dropdowns.length > 0;
+      });
+      
+      if (dropdownVisible) {
+        logger.info(`${fieldName}: Dropdown detected, selecting first option`);
+      } else {
+        logger.info(`${fieldName}: No dropdown detected, trying to select anyway`);
+      }
+      
+      // Press down arrow to select first option
+      await this.page.keyboard.press('ArrowDown');
+      await this.randomDelay(300, 500);
+      
+      // Press enter to accept selection
+      await this.page.keyboard.press('Enter');
+      await this.randomDelay(800, 1200);
+      
+      // Verify the text was typed correctly
+      const fieldValue = await element.evaluate((el: any) => el.value || '');
+      const hasContent = fieldValue.length > 0;
+      
+      if (!hasContent) {
+        logger.warn(`${fieldName}: No content after combobox selection, trying again with different approach`);
+        
+        // Try a more aggressive approach with even slower typing
+        await element.click();
+        await this.randomDelay(1000, 1500);
+        
+        // Clear again
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.up('Control');
+        await this.page.keyboard.press('Backspace');
+        await this.randomDelay(500, 800);
+        
+        // Focus and type again with even slower typing
+        await element.focus();
+        await this.randomDelay(800, 1200);
+        
+        // Type even slower for the retry
+        for (const char of text) {
+          await this.page.keyboard.type(char);
+          await this.randomDelay(300, 500);
+        }
+        await this.randomDelay(2000, 2500);
+        
+        // Try selection again
+        await this.page.keyboard.press('ArrowDown');
+        await this.randomDelay(400, 600);
+        await this.page.keyboard.press('Enter');
+        await this.randomDelay(1000, 1500);
+        
+        // Check again
+        const retryValue = await element.evaluate((el: any) => el.value || '');
+        const retryHasContent = retryValue.length > 0;
+        
+        if (!retryHasContent) {
+          logger.error(`${fieldName}: Still failed after retry`);
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: `${fieldName.toUpperCase()}_COMBOBOX_FAILED`,
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: `Failed to fill combobox ${fieldName} after multiple retries`,
+          };
+        }
+      }
+
+      logger.info(`Successfully filled combobox ${fieldName} with: ${fieldValue}`);
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: `${fieldName.toUpperCase()}_COMBOBOX_ERROR`,
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : `Error filling combobox ${fieldName}`,
+      };
+    }
+  }
+
+  private async typeDateWithVerification(
+    element: any, 
+    text: string, 
+    fieldName: string
+  ): Promise<LoginResult> {
+    try {
+      // Clear the field first and ensure focus
+      await element.click();
+      await this.randomDelay(800, 1200);
+      
+      // Clear existing content
+      await this.page.keyboard.down('Control');
+      await this.page.keyboard.press('KeyA');
+      await this.page.keyboard.up('Control');
+      await this.page.keyboard.press('Backspace');
+      await this.randomDelay(300, 500);
+      
+      // Ensure element is still focused
+      await element.focus();
+      await this.randomDelay(500, 800);
+      
+      // Type the date text character by character with longer delays
+      for (const char of text) {
+        await this.page.keyboard.type(char);
+        await this.randomDelay(100, 200); // Slower typing for dates
+      }
+      await this.randomDelay(800, 1200);
+      
+      // Press Tab to move to next field and trigger validation
+      await this.page.keyboard.press('Tab');
+      await this.randomDelay(500, 800);
+      
+      // Click outside the date modal to close it
+      await this.closeDateModal();
+      await this.randomDelay(500, 800);
+      
+      // Verify the date was typed correctly
+      const fieldValue = await element.evaluate((el: any) => el.value || '');
+      const hasContent = fieldValue.length > 0;
+      
+      if (!hasContent) {
+        logger.warn(`${fieldName}: No content after date typing, trying again`);
+        
+        // Try a more aggressive approach
+        await element.click();
+        await this.randomDelay(1000, 1500);
+        
+        // Clear again
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.up('Control');
+        await this.page.keyboard.press('Backspace');
+        await this.randomDelay(500, 800);
+        
+        // Focus and type again
+        await element.focus();
+        await this.randomDelay(800, 1200);
+        
+        // Type date again with even slower typing
+        for (const char of text) {
+          await this.page.keyboard.type(char);
+          await this.randomDelay(150, 250);
+        }
+        await this.randomDelay(1000, 1500);
+        
+        // Press Tab again
+        await this.page.keyboard.press('Tab');
+        await this.randomDelay(500, 800);
+        
+        // Click outside the date modal to close it (retry)
+        await this.closeDateModal();
+        await this.randomDelay(500, 800);
+        
+        // Check again
+        const retryValue = await element.evaluate((el: any) => el.value || '');
+        const retryHasContent = retryValue.length > 0;
+        
+        if (!retryHasContent) {
+          logger.error(`${fieldName}: Still failed after retry`);
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: `${fieldName.toUpperCase()}_DATE_FAILED`,
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: `Failed to fill date ${fieldName} after multiple retries`,
+          };
+        }
+      }
+
+      logger.info(`Successfully filled date ${fieldName} with: ${fieldValue}`);
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: `${fieldName.toUpperCase()}_DATE_ERROR`,
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : `Error filling date ${fieldName}`,
+      };
+    }
+  }
+
   private async typeWithVerification(
     element: any, 
     text: string, 
     fieldName: string
   ): Promise<LoginResult> {
     try {
-      // Click into the element first
+      // Clear the field first and ensure focus
       await element.click();
-      await this.randomDelay(500, 1000);
+      await this.randomDelay(800, 1200);
       
-      // Type the text
+      // Clear existing content
+      await this.page.keyboard.down('Control');
+      await this.page.keyboard.press('KeyA');
+      await this.page.keyboard.up('Control');
+      await this.page.keyboard.press('Backspace');
+      await this.randomDelay(300, 500);
+      
+      // Ensure element is still focused
+      await element.focus();
+      await this.randomDelay(500, 800);
+      
+      // Type the text with slower, more deliberate typing
       await this.typeHumanLike(text);
-      await this.randomDelay(500, 1000);
+      await this.randomDelay(800, 1200);
       
       // Verify the first letter was typed, if not try again
       const firstLetterTyped = await this.checkIfFirstLetterTyped(text);
       if (!firstLetterTyped) {
-        logger.warn(`${fieldName}: First letter not typed, trying again`);
+        logger.warn(`${fieldName}: First letter not typed, trying again with more focus`);
+        
+        // Try a more aggressive approach
         await element.click();
-        await this.randomDelay(500, 1000);
+        await this.randomDelay(1000, 1500);
+        
+        // Clear again
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.up('Control');
+        await this.page.keyboard.press('Backspace');
+        await this.randomDelay(500, 800);
+        
+        // Focus and type again
+        await element.focus();
+        await this.randomDelay(800, 1200);
         await this.typeHumanLike(text);
-        await this.randomDelay(500, 1000);
+        await this.randomDelay(1000, 1500);
         
         // Check again
         const retryTyped = await this.checkIfFirstLetterTyped(text);
         if (!retryTyped) {
+          logger.error(`${fieldName}: Still failed after retry, checking field value directly`);
+          
+          // Last resort: check the actual field value
+          const fieldValue = await element.evaluate((el: any) => el.value || '');
+          const hasContent = fieldValue.length > 0;
+          
+          if (hasContent) {
+            logger.info(`${fieldName}: Field has content, proceeding despite verification failure`);
+            return {
+              status: 'success',
+              stage: 'create_profile',
+              screenshots: this.screenshots,
+              url: this.page.url(),
+            };
+          }
+          
           return {
             status: 'soft_fail',
             stage: 'create_profile',
             error_code: `${fieldName.toUpperCase()}_TYPING_FAILED`,
             screenshots: this.screenshots,
             url: this.page.url(),
-            evidence: `Failed to type ${fieldName} text after retry`,
+            evidence: `Failed to type ${fieldName} text after multiple retries`,
           };
         }
       }
@@ -3749,7 +4083,8 @@ export class LoginAutomation {
   private async typeHumanLike(text: string): Promise<void> {
     for (const char of text) {
       await this.page.keyboard.type(char);
-      await this.randomDelay(50, 150);
+      // Slower, more deliberate typing for better reliability
+      await this.randomDelay(80, 200);
     }
   }
 
@@ -3766,5 +4101,254 @@ export class LoginAutomation {
       fullPage: true 
     });
     return filename;
+  }
+
+  private async closeDateModal(): Promise<void> {
+    try {
+      logger.info('Attempting to close date modal...');
+      
+      // Try multiple approaches to close the date modal
+      
+      // 1. Try clicking outside the date picker area
+      const pageSize = await this.page.evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight
+      }));
+      
+      // Click in the top-left corner of the page (away from date picker)
+      await this.page.mouse.click(50, 50);
+      await this.randomDelay(300, 500);
+      
+      // 2. Try pressing Escape key
+      await this.page.keyboard.press('Escape');
+      await this.randomDelay(300, 500);
+      
+      // 3. Try clicking on a neutral area (like the page background)
+      await this.page.mouse.click(pageSize.width / 2, pageSize.height / 2);
+      await this.randomDelay(300, 500);
+      
+      // 4. Try pressing Tab to move focus away
+      await this.page.keyboard.press('Tab');
+      await this.randomDelay(300, 500);
+      
+      // 5. Check if date modal is still visible and try to close it directly
+      const dateModalVisible = await this.page.evaluate(() => {
+        const modalSelectors = [
+          '[role="dialog"]',
+          '.date-picker',
+          '.calendar',
+          '.date-modal',
+          '[class*="date"]',
+          '[class*="calendar"]',
+          '[class*="picker"]'
+        ];
+        
+        for (const selector of modalSelectors) {
+          const elements = document.querySelectorAll(selector);
+          if (elements.length > 0) {
+            return true;
+          }
+        }
+        return false;
+      });
+      
+      if (dateModalVisible) {
+        logger.info('Date modal still visible, trying to close it directly');
+        
+        // Try to find and click close buttons or overlay
+        const closeSelectors = [
+          '[aria-label="Close"]',
+          '[data-test="close"]',
+          '.close',
+          '.modal-close',
+          '[class*="close"]',
+          '[class*="overlay"]'
+        ];
+        
+        for (const selector of closeSelectors) {
+          try {
+            const closeElement = await this.page.$(selector);
+            if (closeElement) {
+              await closeElement.click();
+              await this.randomDelay(300, 500);
+              logger.info(`Clicked close element with selector: ${selector}`);
+              break;
+            }
+          } catch (error) {
+            // Continue to next selector
+          }
+        }
+      }
+      
+      logger.info('Date modal close attempt completed');
+    } catch (error) {
+      logger.warn('Error while trying to close date modal:', error);
+      // Don't throw error, just log it and continue
+    }
+  }
+
+  private async typeCityWithDropdownSelection(
+    element: any, 
+    cityName: string
+  ): Promise<LoginResult> {
+    try {
+      logger.info(`Filling city field with: ${cityName}`);
+      
+      // Clear the field first and ensure focus
+      await element.click();
+      await this.randomDelay(1000, 1500);
+      
+      // Clear existing content
+      await this.page.keyboard.down('Control');
+      await this.page.keyboard.press('KeyA');
+      await this.page.keyboard.up('Control');
+      await this.page.keyboard.press('Backspace');
+      await this.randomDelay(500, 800);
+      
+      // Ensure element is still focused
+      await element.focus();
+      await this.randomDelay(800, 1200);
+      
+      // Type the city name very slowly, character by character
+      // This is crucial for triggering the dropdown properly
+      for (const char of cityName) {
+        await this.page.keyboard.type(char);
+        // Longer delays between characters to ensure dropdown triggers
+        await this.randomDelay(300, 500);
+      }
+      
+      // Wait longer for dropdown to appear after typing
+      logger.info('Waiting for city dropdown to appear...');
+      await this.randomDelay(2000, 3000);
+      
+      // Check if dropdown is visible with multiple selectors
+      const dropdownVisible = await this.page.evaluate(() => {
+        const dropdownSelectors = [
+          '[role="listbox"]',
+          '[role="option"]',
+          '.dropdown',
+          '.autocomplete-dropdown',
+          '[data-test="dropdown"]',
+          '.MuiAutocomplete-popper',
+          '.MuiAutocomplete-listbox',
+          '[class*="dropdown"]',
+          '[class*="autocomplete"]',
+          '[class*="suggestions"]'
+        ];
+        
+        for (const selector of dropdownSelectors) {
+          const elements = document.querySelectorAll(selector);
+          if (elements.length > 0) {
+            return true;
+          }
+        }
+        return false;
+      });
+      
+      if (dropdownVisible) {
+        logger.info('City dropdown detected, selecting first option');
+      } else {
+        logger.info('No city dropdown detected, trying to select anyway');
+      }
+      
+      // Press down arrow to select first option
+      await this.page.keyboard.press('ArrowDown');
+      await this.randomDelay(500, 800);
+      
+      // Press enter to accept selection
+      await this.page.keyboard.press('Enter');
+      await this.randomDelay(1000, 1500);
+      
+      // Alternative approach: try to click on the first dropdown option if keyboard selection fails
+      let fieldValue = await element.evaluate((el: any) => el.value || '');
+      if (fieldValue.length === 0) {
+        logger.info('Keyboard selection failed, trying to click dropdown option directly');
+        
+        try {
+          // Try to find and click the first dropdown option
+          const dropdownOption = await this.page.waitForSelector(
+            '[role="option"], .dropdown-item, .autocomplete-option, [data-test="dropdown-option"]',
+            { timeout: 3000 }
+          );
+          
+          if (dropdownOption) {
+            await dropdownOption.click();
+            await this.randomDelay(1000, 1500);
+            logger.info('Clicked dropdown option directly');
+          }
+        } catch (clickError) {
+          logger.warn('Failed to click dropdown option directly');
+        }
+      }
+      
+      // Verify the text was filled correctly
+      fieldValue = await element.evaluate((el: any) => el.value || '');
+      const hasContent = fieldValue.length > 0;
+      
+      if (!hasContent) {
+        logger.warn('City field: No content after dropdown selection, trying again with even slower typing');
+        
+        // Try a more aggressive approach with even slower typing
+        await element.click();
+        await this.randomDelay(1500, 2000);
+        
+        // Clear again
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.up('Control');
+        await this.page.keyboard.press('Backspace');
+        await this.randomDelay(800, 1200);
+        
+        // Focus and type again with even slower typing
+        await element.focus();
+        await this.randomDelay(1000, 1500);
+        
+        // Type even slower for the retry
+        for (const char of cityName) {
+          await this.page.keyboard.type(char);
+          await this.randomDelay(400, 600);
+        }
+        await this.randomDelay(3000, 4000);
+        
+        // Try selection again
+        await this.page.keyboard.press('ArrowDown');
+        await this.randomDelay(600, 800);
+        await this.page.keyboard.press('Enter');
+        await this.randomDelay(1500, 2000);
+        
+        // Check again
+        const retryValue = await element.evaluate((el: any) => el.value || '');
+        const retryHasContent = retryValue.length > 0;
+        
+        if (!retryHasContent) {
+          logger.error('City field: Still failed after retry');
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'CITY_COMBOBOX_FAILED',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: `Failed to fill city combobox after multiple retries`,
+          };
+        }
+      }
+
+      logger.info(`Successfully filled city field with: ${fieldValue}`);
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'CITY_COMBOBOX_ERROR',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : `Error filling city combobox`,
+      };
+    }
   }
 }

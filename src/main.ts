@@ -312,6 +312,93 @@ const statsCmd = command({
   },
 });
 
+// Command to test proxy configuration
+const testProxyCmd = command({
+  name: 'test-proxy',
+  description: 'Test proxy configuration',
+  args: {
+    headless: flag({
+      type: boolean,
+      long: 'headless',
+      short: 'h',
+      description: 'Run browser in headless mode',
+      defaultValue: () => false,
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info('Testing proxy configuration...');
+      
+      // Initialize browser manager
+      const browserManager = new BrowserManager({ headless: args.headless });
+      
+      // Log proxy configuration
+      if (browserManager.isProxyEnabled()) {
+        const proxyInfo = browserManager.getProxyInfo();
+        const proxyHost = proxyInfo?.country 
+          ? `${proxyInfo.country}.decodo.com`
+          : proxyInfo?.host;
+        
+        // Construct the full username for display
+        let displayUsername = proxyInfo?.username;
+        const hasCountryInUsername = proxyInfo?.username?.includes('-country-');
+        const hasZipInUsername = proxyInfo?.username?.includes('-zip-');
+        
+        if (!hasCountryInUsername && proxyInfo?.country && proxyInfo?.zipCode) {
+          displayUsername = `${proxyInfo.username}-country-${proxyInfo.country}-zip-${proxyInfo.zipCode}`;
+        } else if (!hasCountryInUsername && proxyInfo?.country) {
+          displayUsername = `${proxyInfo.username}-country-${proxyInfo.country}`;
+        }
+        
+        logger.info({ 
+          proxyHost,
+          proxyPort: proxyInfo?.port,
+          proxyCountry: proxyInfo?.country,
+          proxyZipCode: proxyInfo?.zipCode,
+          proxyRotateMinutes: proxyInfo?.rotateMinutes,
+          proxyUsername: displayUsername
+        }, 'Decodo proxy configuration detected');
+        
+        // Test proxy by visiting a simple page
+        const page = await browserManager.newPage();
+        logger.info('Testing proxy connection...');
+        
+        await page.goto('https://httpbin.org/ip', {
+          waitUntil: 'networkidle2',
+          timeout: 30000,
+        });
+        
+        // Extract IP information from the page
+        const ipInfo = await page.evaluate(() => {
+          const pre = document.querySelector('pre');
+          if (pre) {
+            try {
+              return JSON.parse(pre.textContent || '{}');
+            } catch (e) {
+              return { error: 'Failed to parse IP info' };
+            }
+          }
+          return { error: 'IP info not found' };
+        });
+        
+        logger.info('Successfully connected through proxy');
+        logger.info('IP Information:', ipInfo);
+        
+        await page.close();
+      } else {
+        logger.info('No proxy configuration found');
+      }
+      
+      // Cleanup
+      await browserManager.close();
+      
+    } catch (error) {
+      logger.error(error, 'Failed to test proxy configuration');
+      process.exit(1);
+    }
+  },
+});
+
 // Main command with subcommands
 const mainCmd = command({
   name: 'up-crawler',
@@ -325,6 +412,7 @@ const mainCmd = command({
     logger.info('  add-user        - Add a new user to the database');
     logger.info('  process-users   - Process pending users for automation');
     logger.info('  stats           - Show application statistics');
+    logger.info('  test-proxy      - Test proxy configuration');
     logger.info('Use --help with any command for more information');
   },
 });
@@ -345,6 +433,9 @@ switch (commandName) {
     break;
   case 'stats':
     await run(statsCmd, commandArgs);
+    break;
+  case 'test-proxy':
+    await run(testProxyCmd, commandArgs);
     break;
   case 'import-csv':
     await run(importCsvCmd, commandArgs);

@@ -30,6 +30,25 @@ export class UpworkService {
       maxRetries: config.maxRetries ?? 3,
       retryDelay: config.retryDelay ?? 5000,
     };
+
+    // Log proxy configuration if enabled
+    if (this.browserManager.isProxyEnabled()) {
+      const proxyInfo = this.browserManager.getProxyInfo();
+      const proxyHost = proxyInfo?.country 
+        ? `${proxyInfo.country}.decodo.com`
+        : proxyInfo?.host;
+      
+      logger.info({ 
+        proxyHost,
+        proxyPort: proxyInfo?.port,
+        proxyCountry: proxyInfo?.country,
+        proxyZipCode: proxyInfo?.zipCode,
+        proxyRotateMinutes: proxyInfo?.rotateMinutes,
+        proxyUsername: proxyInfo?.username
+      }, 'Decodo proxy enabled for Upwork service');
+    } else {
+      logger.info('No proxy configured, using direct connection');
+    }
   }
 
   async visitLoginPage(keepOpen: boolean = false): Promise<boolean> {

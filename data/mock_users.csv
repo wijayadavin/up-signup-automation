@@ -1,2 +1,2 @@
-first_name	last_name	email	password	country_code	attempt_count	last_attempt_at	last_error_code	last_error_message	success_at	captcha_flagged_at	location_street_address	location_city	location_state	location_post_code						
-Zoe	Bennett	zoe.bennet03@outlook.com	workhard2025!	SG	0						12 Orchard Road	Singapore	Central	238832						
+first_name	last_name	email	password	country_code	attempt_count	last_attempt_at	last_error_code	last_error_message	success_at	captcha_flagged_at	location_street_address	location_city	location_state	location_post_code	birth_date						
+Zoe	Bennett	zoe.bennet03@outlook.com	workhard2025!	US	0						1200 Market St	San Francisco	California	94102	2003-04-30						
