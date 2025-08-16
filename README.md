@@ -7,11 +7,20 @@ A robust puppeteer-based sign-up automation tool for Upwork with PostgreSQL data
 - **Robust Browser Automation**: Uses puppeteer-extra with stealth plugins to avoid detection
 - **PostgreSQL Database**: Stores user data and automation progress
 - **Comprehensive Login Automation**: Complete Upwork login flow with error detection
+- **Full Profile Creation Workflow**: Complete 11-step profile creation process including:
+  - Experience selection and work goals
+  - Categories and skills selection
+  - Employment and education history
+  - Location and personal information
+  - Profile picture upload
+- **Smart Navigation Fallbacks**: URL-based navigation when UI elements are missing
+- **Modal Handling**: Automated form filling for employment and education modals
 - **Error Handling**: Comprehensive error tracking and retry mechanisms
 - **Logging**: Structured logging with Pino
 - **CLI Interface**: Easy-to-use command-line interface
 - **Screenshot Capture**: Automatic screenshots for debugging
 - **CSV Import**: Bulk user import with database-aligned headers
+- **Proxy Support**: Decodo residential proxy integration with IP rotation
 
 ## Database Schema
 
@@ -240,17 +249,114 @@ The automation follows a step-by-step process that mimics human behavior while h
 - If successful, takes a screenshot of the create profile page
 - If any security measures are detected, stops and reports the issue
 
-### Step 6: Complete Profile Creation
-**What happens:** The system completes the initial profile setup
+### Step 6: Complete Profile Creation Workflow
+**What happens:** The system completes the comprehensive profile creation process through multiple steps
+
+#### 6.1: Initial Profile Setup
 - Takes a screenshot of the create profile page
 - Looks for the "Get Started" button
-- Clicks the button to proceed
-- Waits for the page to navigate to the next step
-- If successful, marks the user as fully processed
+- Clicks the button to proceed to the first step
+- Waits for navigation to complete
+
+#### 6.2: Profile Creation Steps Sequence
+The automation follows this exact sequence through Upwork's profile creation flow:
+
+**Step 1: Experience Selection**
+- URL: `/nx/create-profile/experience`
+- Action: Select freelancing experience level
+- Button: Click "Next" to proceed
+- Fallback: Direct URL navigation if button missing
+
+**Step 2: Work Goals**
+- URL: `/nx/create-profile/goal`
+- Action: Select primary work goals
+- Button: Click "Next" to proceed
+
+**Step 3: Work Preferences**
+- URL: `/nx/create-profile/work-preference`
+- Action: Select preferred work arrangements
+- Button: Click "Next" to proceed
+
+**Step 4: Resume Import**
+- URL: `/nx/create-profile/resume-import`
+- Action: Choose "Fill out manually" option
+- Button: Click to proceed to next step
+
+**Step 5: Categories Selection**
+- URL: `/nx/create-profile/categories`
+- Action: Select primary category (e.g., "IT & Networking")
+- Subcategory: Select specific skills (e.g., "Information Security & Compliance")
+- Button: Click "Next" to proceed
+
+**Step 6: Skills Selection**
+- URL: `/nx/create-profile/skills`
+- Action: Select relevant skills from available options
+- Button: Click "Next" to proceed
+
+**Step 7: Professional Title**
+- URL: `/nx/create-profile/title`
+- Action: Enter professional title
+- Button: Click "Next" to proceed
+
+**Step 8: Employment History**
+- URL: `/nx/create-profile/employment`
+- Action: Click "Add experience" button
+- Modal: Fill out employment form with:
+  - Job Title: "Senior Software Engineer"
+  - Company: "Tech Solutions Inc"
+  - Location: "New York"
+  - Country: "United States"
+  - Currently Working: Check "I am currently working in this role"
+  - Start Date: January 2020
+  - Description: Sample job description
+- Button: Click "Save" to close modal
+
+**Step 9: Education**
+- URL: `/nx/create-profile/education`
+- Action: Click "Add education" button
+- Modal: Fill out education form
+- Button: Click "Save" to close modal
+
+**Step 10: Languages**
+- URL: `/nx/create-profile/languages`
+- Action: Select languages and proficiency levels
+- Button: Click "Next" to proceed
+
+**Step 11: Location & Personal Info**
+- URL: `/nx/create-profile/location`
+- Action: Fill out location details:
+  - Street Address: From user data or default
+  - City: From user data or default
+  - State/Province: From user data or default
+  - ZIP/Postal Code: From user data or default
+  - Birth Date: From user data or default
+- Profile Picture: Upload default profile picture
+- Button: Click "Next" to proceed
+
+#### 6.3: Smart Navigation & Fallbacks
+The automation includes robust fallback mechanisms:
+
+**URL Navigation Fallback:**
+- If "Next" button is missing, navigates directly to next URL in sequence
+- Handles UI variations and missing elements gracefully
+- Continues progression even when buttons are not found
+
+**Modal Handling:**
+- Detects and opens modals for employment and education
+- Fills forms with realistic data
+- Handles "currently working" checkbox to skip end dates
+- Saves and closes modals properly
+
+**Error Recovery:**
+- Retries failed interactions with different selectors
+- Falls back to text-based element search
+- Continues with partial success when possible
 
 **Possible outcomes:**
-- ✅ Success: Navigation completes → User marked as successful
-- ❌ Error: "Get Started" button not found → Marks as `GET_STARTED_NOT_FOUND`
+- ✅ Success: All steps completed → User marked as successful
+- ❌ Error: Specific step failure → Marks with appropriate error code
+- ❌ Error: Navigation timeout → Marks as `NAVIGATION_TIMEOUT`
+- ❌ Error: Element not found → Marks with specific error code
 
 ### Error Detection & Handling
 
@@ -573,6 +679,33 @@ The application tracks various error types:
 - `EMAIL_FIELD_NOT_FOUND`: Login form not found
 - `PASSWORD_FIELD_NOT_FOUND`: Password form not found
 - `GET_STARTED_NOT_FOUND`: Create profile button not found
+
+### Profile Creation Errors:
+- `NAVIGATION_TIMEOUT`: Page navigation timeout
+- `EXPERIENCE_NEXT_NOT_FOUND`: Next button missing on experience page
+- `EXPERIENCE_NAVIGATION_FALLBACK_FAILED`: URL fallback navigation failed
+- `GOAL_NEXT_NOT_FOUND`: Next button missing on goal page
+- `WORK_PREF_PAGE_NOT_FOUND`: Work preference page not detected
+- `WORK_PREF_CHECKBOX_NOT_FOUND`: Work preference checkbox not found
+- `RESUME_IMPORT_PAGE_NOT_FOUND`: Resume import page not detected
+- `RESUME_MANUAL_BUTTON_NOT_FOUND`: "Fill out manually" button not found
+- `CATEGORIES_LEFT_ITEM_NOT_FOUND`: Category selection item not found
+- `CATEGORIES_RIGHT_CHECKBOX_NOT_FOUND`: Subcategory checkbox not found
+- `CATEGORIES_NEXT_NOT_FOUND`: Next button missing on categories page
+- `SKILLS_SELECTION_FAILED`: Skills selection step failed
+- `TITLE_INPUT_NOT_FOUND`: Professional title input not found
+- `EMPLOYMENT_ADD_BUTTON_NOT_FOUND`: "Add experience" button not found
+- `EMPLOYMENT_MODAL_NOT_VISIBLE`: Employment modal did not appear
+- `MODAL_TITLE_INPUT_NOT_FOUND`: Job title input not found in modal
+- `MODAL_COMPANY_INPUT_NOT_FOUND`: Company input not found in modal
+- `MODAL_DESCRIPTION_NOT_FOUND`: Description textarea not found in modal
+- `MODAL_SAVE_NOT_FOUND`: Save button not found in modal
+- `EDUCATION_ADD_BUTTON_NOT_FOUND`: "Add education" button not found
+- `EDUCATION_MODAL_NOT_FOUND`: Education modal not detected
+- `LANGUAGES_SELECTION_FAILED`: Languages selection step failed
+- `LOCATION_FIELD_NOT_FOUND`: Location field not found
+- `LOCATION_CITY_NOT_FOUND`: City field not found
+- `LOCATION_STREET_ADDRESS_NOT_FOUND`: Street address field not found
 
 ### General Errors:
 - `LOGIN_PAGE_FAILED`: Unable to reach login page

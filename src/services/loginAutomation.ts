@@ -554,20 +554,20 @@ export class LoginAutomation {
         try {
           await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
         } catch (error) {
-          // Check if we're already on the experience page
+          // Check if we're on any profile creation page
           const currentUrl = this.page.url();
-          if (!currentUrl.includes('/nx/create-profile/experience')) {
-            logger.error('Navigation timeout and not on experience page:', currentUrl);
+          if (!currentUrl.includes('/nx/create-profile/')) {
+            logger.error('Navigation timeout and not on profile creation page:', currentUrl);
             return {
               status: 'soft_fail',
               stage: 'create_profile',
               error_code: 'NAVIGATION_TIMEOUT',
               screenshots: this.screenshots,
               url: currentUrl,
-              evidence: `Failed to navigate to experience page after clicking Get started. Current URL: ${currentUrl}`,
+              evidence: `Failed to navigate to profile creation page after clicking Get started. Current URL: ${currentUrl}`,
             };
           } else {
-            logger.info('Navigation timeout but already on experience page, continuing...');
+            logger.info(`Navigation timeout but on profile creation page: ${currentUrl}, continuing...`);
           }
         }
       }
@@ -1265,18 +1265,24 @@ export class LoginAutomation {
       return 'work_preference';
     } else if (url.includes('/nx/create-profile/resume-import')) {
       return 'resume_import';
+    } else if (url.includes('/nx/create-profile/categories')) {
+      return 'categories';
+    } else if (url.includes('/nx/create-profile/skills')) {
+      return 'skills';
+    } else if (url.includes('/nx/create-profile/title')) {
+      return 'title';
+    } else if (url.includes('/nx/create-profile/employment')) {
+      return 'employment';
     } else if (url.includes('/nx/create-profile/education')) {
       return 'education';
     } else if (url.includes('/nx/create-profile/languages')) {
       return 'languages';
-    } else if (url.includes('/nx/create-profile/skills')) {
-      return 'skills';
+    } else if (url.includes('/nx/create-profile/location')) {
+      return 'location';
     } else if (url.includes('/nx/create-profile/overview')) {
       return 'overview';
     } else if (url.includes('/nx/create-profile/rate')) {
       return 'rate';
-    } else if (url.includes('/nx/create-profile/location')) {
-      return 'location';
     } else if (url.includes('/nx/create-profile/general')) {
       return 'general';
     } else if (url.includes('/nx/create-profile')) {
@@ -1451,12 +1457,15 @@ export class LoginAutomation {
 
       // First, look for "Add education" button
       const addEducationButton = await this.waitForSelectorWithRetry([
-        '[role="button"][aria-label*="Add education"]',
-        '[role="button"][aria-label*="Add Education"]',
+        'button[data-qa="education-add-btn"]',
+        'button[data-ev-label="education_add_btn"]',
+        'button[aria-labelledby="add-education-label"]',
+        'a[data-ev-label="add_more_link"] button',
+        '.carousel-list-add-new button',
         'button:contains("Add education")',
         'button:contains("Add Education")',
-        '[data-qa="education-add-btn"]',
-        'button[data-ev-label="education_add_btn"]',
+        '[role="button"][aria-label*="Add education"]',
+        '[role="button"][aria-label*="Add Education"]',
       ], 15000);
 
       if (addEducationButton) {
@@ -2436,13 +2445,39 @@ export class LoginAutomation {
       this.screenshots.categories_before = await this.takeScreenshot('categories_before');
 
       // Step 1: Select left menu item "IT & Networking"
-      const leftMenuItem = await this.waitForSelectorWithRetry([
-        '[role="link"][aria-label*="IT & Networking"]',
-        '[role="button"][aria-label*="IT & Networking"]',
-        '[data-ev-label="category_activate"][aria-label*="IT"]',
-        '[role="link"][aria-label*="IT"]',
-        '[role="button"][aria-label*="IT"]',
+      let leftMenuItem = await this.waitForSelectorWithRetry([
+        'a[data-ev-label="category_activate"]',
+        '.air3-list-nav-link[data-ev-label="category_activate"]',
+        '.categories .air3-list-nav-item a',
       ], 15000);
+
+      if (!leftMenuItem) {
+        logger.warn('No category links found with CSS selectors, trying text-based search...');
+        
+        // Try to find by text content
+        const allCategoryLinks = await this.page.$$('a[data-ev-label="category_activate"], .air3-list-nav-link');
+        for (const link of allCategoryLinks) {
+          const text = await link.evaluate(el => el.textContent?.trim() || '');
+          if (text.includes('IT & Networking')) {
+            logger.info(`Found IT & Networking category via text search: "${text}"`);
+            leftMenuItem = link;
+            break;
+          }
+        }
+      }
+
+      if (!leftMenuItem) {
+        // Check if IT & Networking is already selected (has active class)
+        const activeItem = await this.page.$('.air3-list-nav-item.active a, .active .air3-list-nav-link');
+        if (activeItem) {
+          const activeText = await activeItem.evaluate(el => el.textContent?.trim() || '');
+          logger.info(`Found active category: "${activeText}"`);
+          if (activeText.includes('IT & Networking')) {
+            logger.info('IT & Networking is already selected, proceeding to checkbox selection...');
+            leftMenuItem = activeItem; // Use the already active item
+          }
+        }
+      }
 
       if (!leftMenuItem) {
         return {
@@ -2451,21 +2486,65 @@ export class LoginAutomation {
           error_code: 'CATEGORIES_LEFT_ITEM_NOT_FOUND',
           screenshots: this.screenshots,
           url: currentUrl,
-          evidence: 'IT & Networking left menu item not found',
+          evidence: 'IT & Networking left menu item not found using any selector strategy',
         };
       }
 
-      await leftMenuItem.click();
-      await this.randomDelay(1000, 2000);
+      // Only click if not already active
+      const isActive = await leftMenuItem.evaluate((el: Element) => {
+        return el.closest('.air3-list-nav-item')?.classList.contains('active') || false;
+      });
+
+      if (!isActive) {
+        logger.info('Clicking IT & Networking category...');
+        await leftMenuItem.click();
+        await this.randomDelay(1000, 2000);
+      } else {
+        logger.info('IT & Networking category already active, skipping click...');
+      }
 
       // Step 2: Select right checkbox "Information Security & Compliance"
-      const checkbox = await this.waitForSelectorWithRetry([
-        '[role="checkbox"][aria-label*="Information Security"]',
-        '[role="checkbox"][aria-label*="Compliance"]',
+      let checkbox = await this.waitForSelectorWithRetry([
+        'label[data-test="checkbox-label"]',
+        '.air3-checkbox-label',
+        'input[type="checkbox"]',
         'label[data-test="checkbox-label"] input[type="checkbox"]',
         'input[type="checkbox"][aria-label*="Information Security"]',
         'input[type="checkbox"][aria-label*="Compliance"]',
       ], 15000);
+
+      if (!checkbox) {
+        logger.warn('No checkbox found with CSS selectors, trying text-based search...');
+        
+        // Try to find by text content in labels
+        const allCheckboxLabels = await this.page.$$('label[data-test="checkbox-label"], .air3-checkbox-label');
+        for (const label of allCheckboxLabels) {
+          const text = await label.evaluate(el => el.textContent?.trim() || '');
+          if (text.includes('Information Security') || text.includes('Compliance') || text.includes('Database Management')) {
+            logger.info(`Found checkbox via text search: "${text}"`);
+            // Try to find the actual input within this label
+            const input = await label.$('input[type="checkbox"]');
+            if (input) {
+              checkbox = input;
+              break;
+            } else {
+              // If no input found, click the label itself
+              checkbox = label;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!checkbox) {
+        // As a last resort, just select the first available checkbox
+        logger.warn('Specific checkbox not found, selecting first available checkbox...');
+        const firstCheckbox = await this.page.$('input[type="checkbox"]:not([checked]), label[data-test="checkbox-label"]:not(:has(input[checked]))');
+        if (firstCheckbox) {
+          logger.info('Found first available unchecked checkbox');
+          checkbox = firstCheckbox;
+        }
+      }
 
       if (!checkbox) {
         return {
@@ -2474,22 +2553,53 @@ export class LoginAutomation {
           error_code: 'CATEGORIES_RIGHT_CHECKBOX_NOT_FOUND',
           screenshots: this.screenshots,
           url: currentUrl,
-          evidence: 'Information Security & Compliance checkbox not found',
+          evidence: 'No checkbox found using any selector strategy',
         };
       }
 
       // Check if already selected, if not then check it
       const isChecked = await checkbox.evaluate((el: Element) => {
-        if (el.getAttribute('role') === 'checkbox') {
+        // If it's a label element, find the input within it
+        if (el.tagName.toLowerCase() === 'label') {
+          const input = el.querySelector('input[type="checkbox"]') as HTMLInputElement;
+          return input ? input.checked : false;
+        }
+        // If it has role="checkbox", check aria-checked
+        else if (el.getAttribute('role') === 'checkbox') {
           return el.getAttribute('aria-checked') === 'true';
-        } else {
+        }
+        // If it's an input element
+        else if (el.tagName.toLowerCase() === 'input') {
           return (el as HTMLInputElement).checked;
         }
+        return false;
       });
 
       if (!isChecked) {
+        logger.info('Checkbox not checked, clicking to select...');
         await checkbox.click();
         await this.randomDelay(500, 1000);
+        
+        // Verify it was checked
+        const nowChecked = await checkbox.evaluate((el: Element) => {
+          if (el.tagName.toLowerCase() === 'label') {
+            const input = el.querySelector('input[type="checkbox"]') as HTMLInputElement;
+            return input ? input.checked : false;
+          } else if (el.getAttribute('role') === 'checkbox') {
+            return el.getAttribute('aria-checked') === 'true';
+          } else if (el.tagName.toLowerCase() === 'input') {
+            return (el as HTMLInputElement).checked;
+          }
+          return false;
+        });
+        
+        if (nowChecked) {
+          logger.info('Checkbox successfully checked');
+        } else {
+          logger.warn('Checkbox click may have failed, but continuing...');
+        }
+      } else {
+        logger.info('Checkbox already checked, skipping...');
       }
 
       await this.randomDelay(1000, 2000);
@@ -2829,9 +2939,11 @@ export class LoginAutomation {
 
       // Step 1: Open "Add experience" modal
       const addButton = await this.waitForSelectorWithRetry([
-        '[role="button"][aria-label*="Add experience"]',
-        '[data-qa="employment-add-btn"]',
+        'button[data-qa="employment-add-btn"]',
         'button[data-ev-label="employment_add_btn"]',
+        'button[aria-labelledby="add-experience-label"]',
+        'a[data-ev-label="add_more_link"] button',
+        '.carousel-list-add-new button',
         'button:contains("Add experience")',
         'button:contains("Add Experience")',
       ], 15000);
@@ -2882,10 +2994,10 @@ export class LoginAutomation {
 
       // Fill title field
       const titleInput = await this.waitForSelectorWithRetry([
-        'input[aria-labelledby*="title-label"]',
-        'input[role="combobox"][type="search"]',
-        'input[data-ev-label="typeahead_input"]',
-        'input[placeholder*="Title"]',
+        'input[aria-labelledby="title-label"]',
+        'input[role="combobox"][type="search"][aria-labelledby="title-label"]',
+        'input[data-ev-label="typeahead_input"][aria-labelledby="title-label"]',
+        'input[placeholder*="Software Engineer"]',
       ], 10000);
 
       if (!titleInput) {
@@ -2899,15 +3011,19 @@ export class LoginAutomation {
         };
       }
 
+      logger.info('Filling title field...');
       await titleInput.click();
+      await this.randomDelay(500, 1000);
+      await titleInput.evaluate((el: Element) => (el as HTMLInputElement).value = ''); // Clear field
       await this.typeHumanLike(employmentData.work_title);
       await this.randomDelay(1000, 2000);
 
       // Fill company field
       const companyInput = await this.waitForSelectorWithRetry([
-        'input[aria-labelledby*="company-label"]',
-        'input[placeholder*="Company"]',
-        'input[data-ev-label="typeahead_input"]',
+        'input[aria-labelledby="company-label"]',
+        'input[role="combobox"][type="search"][aria-labelledby="company-label"]',
+        'input[data-ev-label="typeahead_input"][aria-labelledby="company-label"]',
+        'input[placeholder*="Microsoft"]',
       ], 10000);
 
       if (!companyInput) {
@@ -2921,108 +3037,212 @@ export class LoginAutomation {
         };
       }
 
+      logger.info('Filling company field...');
       await companyInput.click();
+      await this.randomDelay(500, 1000);
+      await companyInput.evaluate((el: Element) => (el as HTMLInputElement).value = ''); // Clear field
       await this.typeHumanLike(employmentData.work_company_name);
       await this.randomDelay(1000, 2000);
 
-      // Fill country dropdown
-      const countryDropdown = await this.waitForSelectorWithRetry([
-        '[role="combobox"][aria-label*="Country"]',
-        '[role="combobox"][aria-label*="Location"]',
-        '[data-test="dropdown-toggle"]',
-        'select',
+      // Fill location field
+      const locationInput = await this.waitForSelectorWithRetry([
+        'input[aria-labelledby="location-label"]',
+        'input[type="text"][aria-labelledby="location-label"]',
+        'input[placeholder*="London"]',
       ], 10000);
 
-      if (!countryDropdown) {
-        return {
-          status: 'soft_fail',
-          stage: 'create_profile',
-          error_code: 'MODAL_COUNTRY_NOT_FOUND',
-          screenshots: this.screenshots,
-          url: currentUrl,
-          evidence: 'Country dropdown not found in modal',
-        };
+      if (locationInput) {
+        logger.info('Filling location field...');
+        await locationInput.click();
+        await this.randomDelay(500, 1000);
+        await locationInput.evaluate((el: Element) => (el as HTMLInputElement).value = ''); // Clear field
+        await this.typeHumanLike('New York');
+        await this.randomDelay(1000, 2000);
+      } else {
+        logger.warn('Location input not found, skipping...');
       }
 
-      await countryDropdown.click();
-      await this.randomDelay(500, 1000);
+      // Check "I am currently working in this role" checkbox first
+      const currentlyWorkingCheckbox = await this.waitForSelectorWithRetry([
+        'input[type="checkbox"]',
+        'label[data-test="checkbox-label"]',
+      ], 10000);
 
-      // Select United States
-      const usOption = await this.waitForSelectorWithRetry([
-        '[role="option"][aria-label*="United States"]',
-        'option[value*="US"]',
-        'li:contains("United States")',
-      ], 5000);
+      let isCurrentlyWorking = false;
+      if (currentlyWorkingCheckbox) {
+        const labelText = await currentlyWorkingCheckbox.evaluate((el: Element) => {
+          // If it's a label, get its text content
+          if (el.tagName.toLowerCase() === 'label') {
+            return el.textContent?.trim() || '';
+          }
+          // If it's an input, check if its parent label has the right text
+          const label = el.closest('label');
+          return label ? label.textContent?.trim() || '' : '';
+        });
+        
+        if (labelText.includes('I am currently working in this role')) {
+          logger.info('Found "currently working" checkbox, checking it...');
+          
+          // Check if already checked
+          const isChecked = await currentlyWorkingCheckbox.evaluate((el: Element) => {
+            if (el.tagName.toLowerCase() === 'label') {
+              const input = el.querySelector('input[type="checkbox"]') as HTMLInputElement;
+              return input ? input.checked : false;
+            }
+            return (el as HTMLInputElement).checked;
+          });
 
-      if (usOption) {
-        await usOption.click();
-        await this.randomDelay(500, 1000);
-      }
-
-      // Fill start date (simplified - just click and select)
-      const startMonthDropdown = await this.waitForSelectorWithRetry([
-        'select[aria-label*="From"]',
-        'select[aria-label*="Start"]',
-      ], 5000);
-
-      if (startMonthDropdown) {
-        await startMonthDropdown.click();
-        await this.randomDelay(500, 1000);
-        // Select January
-        const januaryOption = await this.page.$('option[value="1"], option:contains("January")');
-        if (januaryOption) {
-          await januaryOption.click();
+          if (!isChecked) {
+            await currentlyWorkingCheckbox.click();
+            await this.randomDelay(500, 1000);
+            isCurrentlyWorking = true;
+            logger.info('Checked "currently working" checkbox');
+          } else {
+            logger.info('"Currently working" checkbox already checked');
+            isCurrentlyWorking = true;
+          }
         }
       }
 
+      // Country dropdown is probably already set to United States, check if we need to change it
+      const countryDropdown = await this.waitForSelectorWithRetry([
+        'div[data-test="dropdown-toggle"][aria-labelledby="location-label"]',
+        'div[role="combobox"][aria-labelledby="location-label"]',
+        '[data-test="dropdown-toggle"]',
+      ], 10000);
+
+      if (countryDropdown) {
+        const currentCountry = await countryDropdown.evaluate((el: Element) => {
+          const label = el.querySelector('.air3-dropdown-toggle-label');
+          return label ? label.textContent?.trim() || '' : '';
+        });
+        
+        if (!currentCountry.includes('United States')) {
+          logger.info('Clicking country dropdown to select United States...');
+          await countryDropdown.click();
+          await this.randomDelay(500, 1000);
+
+          // Select United States
+          const usOption = await this.waitForSelectorWithRetry([
+            '[role="option"]:contains("United States")',
+            'li:contains("United States")',
+          ], 5000);
+
+          if (usOption) {
+            await usOption.click();
+            await this.randomDelay(500, 1000);
+          }
+        } else {
+          logger.info('Country already set to United States');
+        }
+      } else {
+        logger.warn('Country dropdown not found, skipping...');
+      }
+
+      // Fill start date using the new dropdown structure
+      const startMonthDropdown = await this.waitForSelectorWithRetry([
+        'div[data-test="dropdown-toggle"][aria-labelledby="start-date-month"]',
+        'div[role="combobox"][aria-labelledby="start-date-month"]',
+      ], 10000);
+
+      if (startMonthDropdown) {
+        logger.info('Filling start month...');
+        await startMonthDropdown.click();
+        await this.randomDelay(500, 1000);
+        
+        // Look for January option
+        const januaryOption = await this.waitForSelectorWithRetry([
+          '[role="option"]:contains("January")',
+          'li:contains("January")',
+        ], 5000);
+        
+        if (januaryOption) {
+          await januaryOption.click();
+          await this.randomDelay(500, 1000);
+        }
+      } else {
+        logger.warn('Start month dropdown not found, skipping...');
+      }
+
       const startYearDropdown = await this.waitForSelectorWithRetry([
+        'div[data-test="dropdown-toggle"][aria-labelledby="start-date-year"]',
+        'div[role="combobox"][aria-labelledby="start-date-year"]',
         'select[aria-label*="Year"]',
       ], 5000);
 
       if (startYearDropdown) {
+        logger.info('Filling start year...');
         await startYearDropdown.click();
         await this.randomDelay(500, 1000);
-        // Select 2020
-        const year2020Option = await this.page.$(`option[value="${employmentData.work_start_year}"], option:contains("${employmentData.work_start_year}")`);
+        
+        // Look for 2020 option
+        const year2020Option = await this.waitForSelectorWithRetry([
+          `[role="option"]:contains("${employmentData.work_start_year}")`,
+          `li:contains("${employmentData.work_start_year}")`,
+        ], 5000);
+        
         if (year2020Option) {
           await year2020Option.click();
+          await this.randomDelay(500, 1000);
         }
+      } else {
+        logger.warn('Start year dropdown not found, skipping...');
       }
 
-      // Fill end date
-      const endMonthDropdown = await this.waitForSelectorWithRetry([
-        'select[aria-label*="To"]',
-        'select[aria-label*="End"]',
-      ], 5000);
+      // Fill end date only if NOT currently working
+      if (!isCurrentlyWorking) {
+        logger.info('Not currently working, filling end date...');
+        
+        const endMonthDropdown = await this.waitForSelectorWithRetry([
+          'div[data-test="dropdown-toggle"][aria-labelledby="end-date-month"]',
+          'div[role="combobox"][aria-labelledby="end-date-month"]',
+        ], 5000);
 
-      if (endMonthDropdown) {
-        await endMonthDropdown.click();
-        await this.randomDelay(500, 1000);
-        // Select December
-        const decemberOption = await this.page.$('option[value="12"], option:contains("December")');
-        if (decemberOption) {
-          await decemberOption.click();
+        if (endMonthDropdown) {
+          await endMonthDropdown.click();
+          await this.randomDelay(500, 1000);
+          
+          // Select December
+          const decemberOption = await this.waitForSelectorWithRetry([
+            '[role="option"]:contains("December")',
+            'li:contains("December")',
+          ], 5000);
+          
+          if (decemberOption) {
+            await decemberOption.click();
+            await this.randomDelay(500, 1000);
+          }
         }
-      }
 
-      const endYearDropdown = await this.waitForSelectorWithRetry([
-        'select[aria-label*="Year"]',
-      ], 5000);
+        const endYearDropdown = await this.waitForSelectorWithRetry([
+          'div[data-test="dropdown-toggle"][aria-labelledby="end-date-year"]',
+          'div[role="combobox"][aria-labelledby="end-date-year"]',
+        ], 5000);
 
-      if (endYearDropdown) {
-        await endYearDropdown.click();
-        await this.randomDelay(500, 1000);
-        // Select 2023
-        const year2023Option = await this.page.$(`option[value="${employmentData.work_end_year}"], option:contains("${employmentData.work_end_year}")`);
-        if (year2023Option) {
-          await year2023Option.click();
+        if (endYearDropdown) {
+          await endYearDropdown.click();
+          await this.randomDelay(500, 1000);
+          
+          // Select 2023
+          const year2023Option = await this.waitForSelectorWithRetry([
+            `[role="option"]:contains("${employmentData.work_end_year}")`,
+            `li:contains("${employmentData.work_end_year}")`,
+          ], 5000);
+          
+          if (year2023Option) {
+            await year2023Option.click();
+            await this.randomDelay(500, 1000);
+          }
         }
+      } else {
+        logger.info('Currently working, skipping end date fields...');
       }
 
       // Fill description
       const descriptionTextarea = await this.waitForSelectorWithRetry([
-        'textarea[aria-labelledby*="description-label"]',
-        'textarea[placeholder*="Description"]',
+        'textarea[aria-labelledby="description-label"]',
+        'textarea.air3-textarea',
+        'textarea[rows="6"]',
         'textarea',
       ], 10000);
 
@@ -3037,7 +3257,10 @@ export class LoginAutomation {
         };
       }
 
+      logger.info('Filling description...');
       await descriptionTextarea.click();
+      await this.randomDelay(500, 1000);
+      await descriptionTextarea.evaluate((el: Element) => (el as HTMLTextAreaElement).value = ''); // Clear field
       await this.typeHumanLike(employmentData.work_description);
       await this.randomDelay(1000, 2000);
 
@@ -3045,10 +3268,11 @@ export class LoginAutomation {
 
       // Step 7: Save the employment entry
       const saveButton = await this.waitForSelectorWithRetry([
-        '[role="button"][aria-label*="Save"]',
-        '[data-qa="btn-save"]',
+        'button[data-qa="btn-save"]',
         'button[data-ev-label="btn_save"]',
+        'button.air3-btn.air3-btn-primary',
         'button:contains("Save")',
+        '[role="button"]:contains("Save")',
       ], 10000);
 
       if (!saveButton) {
