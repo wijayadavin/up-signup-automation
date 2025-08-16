@@ -99,11 +99,38 @@ npm run build
 The application provides several commands for different operations:
 
 - **`visit-login`**: Test basic functionality by visiting the Upwork login page
+  - `--debug`: Check login status without performing login (for debugging)
+  - `--headless`: Run browser in headless mode
+  - `--keep-open`: Keep browser open indefinitely
 - **`add-user`**: Add individual users to the database
 - **`process-users`**: Run complete login automation for pending users
 - **`stats`**: View application statistics and user status
 - **`test-proxy`**: Test proxy configuration and verify IP details
 - **`import-csv`**: Bulk import users from CSV/TSV files
+
+### Command Syntax
+
+**Important**: When using `npm start` with command flags, you must use `--` to separate npm arguments from command arguments:
+
+```bash
+# Correct syntax:
+npm start <command> -- <flags>
+
+# Examples:
+npm start visit-login -- --debug --headless
+npm start process-users -- --limit 5 --headless
+npm start test-proxy -- --headless
+
+# Incorrect syntax (flags won't be recognized):
+npm start visit-login --debug --headless  # ❌ Wrong
+```
+
+**Alternative**: You can also run commands directly:
+```bash
+# Direct execution (no npm start needed):
+node dist/main.js visit-login --debug --headless
+node dist/main.js process-users --limit 5 --headless
+```
 
 ### Visit Login Page
 Test the basic functionality by visiting the Upwork login page:
@@ -113,11 +140,27 @@ Test the basic functionality by visiting the Upwork login page:
 npm start visit-login
 
 # Run in headless mode
-npm start visit-login --headless
+npm start visit-login -- --headless
 
 # Keep browser open indefinitely
-npm start visit-login --keep-open
+npm start visit-login -- --keep-open
+
+# Debug mode: check if already logged in without performing login
+npm start visit-login -- --debug
+
+# Debug mode with headless and keep open
+npm start visit-login -- --debug --headless --keep-open
 ```
+
+**Debug Mode Features:**
+- **Login Status Check**: Visits login page and checks if already authenticated
+- **Automatic Redirect Detection**: Detects if redirected to create profile page (logged in)
+- **Status Reporting Only**: Reports login status without performing automation
+- **Screenshot Capture**: Saves screenshots for debugging:
+  - `debug-already-logged-in-*.png`: When already logged in
+  - `debug-not-logged-in-*.png`: When not logged in
+  - `debug-unknown-page-*.png`: When on unexpected page
+- **No Automation**: Use `process-users` command for actual login automation
 
 ### Process Users with Full Login Automation
 Run the complete login automation for pending users:
@@ -127,10 +170,10 @@ Run the complete login automation for pending users:
 npm start process-users
 
 # Process specific number of users
-npm start process-users --limit 1
+npm start process-users -- --limit 1
 
 # Run in headless mode
-npm start process-users --headless
+npm start process-users -- --headless
 ```
 
 The automation includes:
@@ -351,10 +394,10 @@ Run the automation for pending users:
 npm start process-users
 
 # Process specific number of users
-npm start process-users --limit 1
+npm start process-users -- --limit 1
 
 # Run in headless mode
-npm start process-users --headless
+npm start process-users -- --headless
 ```
 
 ### View Statistics
@@ -372,7 +415,7 @@ Test your proxy configuration and verify IP details:
 npm start test-proxy
 
 # Test proxy in headless mode
-npm start test-proxy --headless
+npm start test-proxy -- --headless
 ```
 
 This command will:
@@ -438,10 +481,11 @@ src/
 │   └── csv.ts               # CSV parsing utilities
 ├── types/
 │   └── database.ts          # Database types and interfaces
-├── utils/
-│   └── logger.ts            # Logging utility
 ├── main.ts                  # CLI entry point
 └── migrate.ts               # Migration script
+assets/
+└── images/
+    └── profile-picture.png  # Default profile picture for uploads
 ```
 
 ## Configuration
@@ -454,6 +498,8 @@ src/
 - `PUPPETEER_TIMEOUT`: Browser timeout in milliseconds
 - `PUPPETEER_USER_DATA_DIR`: Chrome user data directory
 - `UPWORK_LOGIN_URL`: Upwork login page URL
+- `DEBUG_EMAIL`: (Optional) Email for reference (not used for automation)
+- `DEBUG_PASSWORD`: (Optional) Password for reference (not used for automation)
 
 ### Proxy Configuration (Decodo)
 
@@ -462,9 +508,9 @@ The application supports residential proxy configuration using Decodo proxy serv
 ```env
 # Residential Proxy Configuration (Decodo)
 PROXY_HOST=us.decodo.com        # country.decodo.com format (e.g., us.decodo.com)
-PROXY_PORT=10000                # Decodo default port
-PROXY_USER=user-spcecpm8t1      # your session ID (without country/zip flags)
-PROXY_PASS=your_password        # your proxy password
+PROXY_PORT=10000                # Not used - auto-selected: 10000=rotating, 10001=sticky(debug)
+PROXY_USER=username             # your session ID (exactly as provided by Decodo)
+PROXY_PASS=password             # your proxy password
 PROXY_COUNTRY=us                # country code (e.g., us|uk|sg|ua)
 PROXY_ZIP_CODE=94102            # zip code for location targeting
 PROXY_ROTATE_MINUTES=10         # sticky duration per run (set by you)
@@ -482,6 +528,22 @@ The application automatically constructs the full username in the format:
 - **Country Selection**: Specify target country for residential IPs
 - **Session Management**: Sticky sessions with configurable duration
 - **Fallback Support**: Gracefully falls back to direct connection if proxy is not configured
+
+**Proxy Modes:**
+
+The application automatically selects the appropriate proxy mode based on usage:
+
+#### **Rotating Mode (Port 10000)**
+- **Used by**: `process-users`, `test-proxy` commands
+- **Purpose**: Production automation with maximum anonymity
+- **IP Changes**: Every request gets a different IP
+- **Best for**: Bulk processing, avoiding detection
+
+#### **Sticky Mode (Port 10001)**
+- **Used by**: `visit-login --debug` command
+- **Purpose**: Debugging and development with session persistence
+- **IP Persistence**: Same IP maintained for the session
+- **Best for**: Debugging, maintaining login state, development
 
 **Proxy Benefits:**
 - **IP Rotation**: Avoid IP-based rate limiting and blocking

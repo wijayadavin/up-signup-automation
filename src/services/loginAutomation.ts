@@ -99,13 +99,30 @@ export class LoginAutomation {
 
     } catch (error) {
       logger.error({ error, userId: this.user.id }, 'Login automation failed');
+      
+      // Provide more specific error codes for debugging
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      let errorCode = 'NETWORK';
+      
+      if (errorMessage.includes('ERR_TUNNEL_CONNECTION_FAILED')) {
+        errorCode = 'PROXY_CONNECTION_FAILED';
+      } else if (errorMessage.includes('ERR_PROXY_AUTH_FAILED')) {
+        errorCode = 'PROXY_AUTH_FAILED';
+      } else if (errorMessage.includes('ERR_PROXY_CONNECTION_FAILED')) {
+        errorCode = 'PROXY_CONNECTION_ERROR';
+      } else if (errorMessage.includes('browser is closed') || errorMessage.includes('browser disconnected')) {
+        errorCode = 'BROWSER_DISCONNECTED';
+      } else if (errorMessage.includes('timeout') || errorMessage.includes('TimeoutError')) {
+        errorCode = 'TIMEOUT_ERROR';
+      }
+      
       return {
         status: 'hard_fail',
         stage: 'email',
-        error_code: 'NETWORK',
+        error_code: errorCode,
         screenshots: this.screenshots,
         url: this.page.url(),
-        evidence: error instanceof Error ? error.message : 'Unknown error',
+        evidence: errorMessage,
       };
     }
   }
@@ -145,6 +162,12 @@ export class LoginAutomation {
         };
       }
 
+      // Check for captcha/network restrictions after page load
+      const captchaResult = await this.checkForCaptcha();
+      if (captchaResult.status !== 'success') {
+        return captchaResult;
+      }
+
       logger.info('Successfully reached login page');
       return {
         status: 'success',
@@ -154,13 +177,31 @@ export class LoginAutomation {
       };
 
     } catch (error) {
+      logger.error('Navigation to login page failed:', error);
+      
+      // Check if it's a proxy connection error
+      const errorMessage = error instanceof Error ? error.message : 'Navigation failed';
+      let errorCode = 'NETWORK';
+      
+      if (errorMessage.includes('ERR_TUNNEL_CONNECTION_FAILED')) {
+        errorCode = 'PROXY_CONNECTION_FAILED';
+      } else if (errorMessage.includes('ERR_PROXY_AUTH_FAILED')) {
+        errorCode = 'PROXY_AUTH_FAILED';
+      } else if (errorMessage.includes('ERR_PROXY_CONNECTION_FAILED')) {
+        errorCode = 'PROXY_CONNECTION_ERROR';
+      } else if (errorMessage.includes('ERR_INTERNET_DISCONNECTED')) {
+        errorCode = 'INTERNET_DISCONNECTED';
+      } else if (errorMessage.includes('TimeoutError')) {
+        errorCode = 'NAVIGATION_TIMEOUT';
+      }
+      
       return {
         status: 'hard_fail',
         stage: 'email',
-        error_code: 'NETWORK',
+        error_code: errorCode,
         screenshots: this.screenshots,
         url: this.page.url(),
-        evidence: error instanceof Error ? error.message : 'Navigation failed',
+        evidence: errorMessage,
       };
     }
   }
@@ -452,24 +493,62 @@ export class LoginAutomation {
       // Handle different starting points
       if (profileStep === 'initial') {
         // Start from the beginning - click Get Started
-      const getStartedButton = await this.waitForSelectorWithRetry([
-        'button[data-qa="get-started-btn"]',
-        '[aria-label*="Get started"]',
-        'button:contains("Get Started")',
-      ], 15000);
+        logger.info('Looking for "Get started" button...');
+        
+        // Take screenshot before attempting to find button
+        await this.takeScreenshot('get_started_before');
+        
+        const getStartedButton = await this.waitForSelectorWithRetry([
+          'button[data-qa="get-started-btn"]',
+          'button[data-ev-label="get_started_btn"]',
+          '[data-qa="get-started-btn"]',
+          '[data-ev-label="get_started_btn"]',
+          'button.air3-btn-primary',
+          '.air3-btn-primary',
+        ], 15000);
+        
+        let buttonClicked = false;
+        
+        // If CSS selectors fail, try text-based search
+        if (!getStartedButton) {
+          logger.warn('CSS selectors failed, trying text-based search...');
+          const allButtons = await this.page.$$('button');
+          for (const button of allButtons) {
+            const text = await button.evaluate(el => el.textContent?.toLowerCase().trim() || '');
+            if (text.includes('get started')) {
+              logger.info('Found "Get started" button via text search');
+              await button.evaluate((el: Element) => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+              await this.randomDelay(1000, 1500);
+              await button.click();
+              logger.info('Successfully clicked "Get started" button');
+              buttonClicked = true;
+              break;
+            }
+          }
+        } else {
+          logger.info('Found "Get started" button via CSS selector');
+          await getStartedButton.evaluate((el: Element) => el.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+          await this.randomDelay(1000, 1500);
+          await getStartedButton.click();
+          logger.info('Successfully clicked "Get started" button');
+          buttonClicked = true;
+        }
+        
+        // Check if button was found and clicked
+        if (!buttonClicked) {
+          logger.error('Failed to find "Get started" button');
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'GET_STARTED_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: 'Could not locate "Get started" button using any selector strategy',
+          };
+        }
 
-      if (!getStartedButton) {
-        return {
-          status: 'soft_fail',
-          stage: 'create_profile',
-          error_code: 'GET_STARTED_NOT_FOUND',
-          screenshots: this.screenshots,
-          url: currentUrl,
-        };
-      }
-
-      await getStartedButton.click();
-      await this.randomDelay(2000, 3000);
+        // Add delay after clicking for UI to respond
+        await this.randomDelay(2000, 3000);
 
       // Wait for navigation
       try {
@@ -1917,15 +1996,26 @@ export class LoginAutomation {
       // Find and fill street address field (might be combobox)
       const streetAddressInput = await this.waitForSelectorWithRetry([
         'input[placeholder*="Enter street address"]',
+        'input[placeholder*="Street address"]',
+        'input[placeholder*="street"]',
+        'input[placeholder*="address"]',
         'input[aria-label*="Street address"]',
+        'input[aria-label*="street"]',
+        'input[aria-label*="address"]',
         'input[name*="street"]',
+        'input[name*="address"]',
+        'input[id*="street"]',
+        'input[id*="address"]',
+        'input[data-test*="street"]',
+        'input[data-test*="address"]',
         'input[role="combobox"]',
         'input[aria-autocomplete]',
         'input[type="text"]',
       ], 15000);
 
       if (streetAddressInput) {
-        const streetResult = await this.typeComboboxWithVerification(streetAddressInput, locationData.street_address, 'street_address');
+        // Street address field needs typing + pause + deselect to work properly
+        const streetResult = await this.typeStreetAddressWithDeselect(streetAddressInput, locationData.street_address);
         if (streetResult.status !== 'success') {
           return streetResult;
         }
@@ -2013,6 +2103,9 @@ export class LoginAutomation {
           return birthDateResult;
         }
       }
+
+      // Handle profile picture upload
+      await this.handleProfilePictureUpload();
 
       logger.info('Filled location form with user data');
 
@@ -4184,6 +4277,295 @@ export class LoginAutomation {
     } catch (error) {
       logger.warn('Error while trying to close date modal:', error);
       // Don't throw error, just log it and continue
+    }
+  }
+
+
+
+  private async typeStreetAddressWithDeselect(
+    element: any, 
+    streetAddress: string
+  ): Promise<LoginResult> {
+    try {
+      logger.info(`Filling street address field with: ${streetAddress}`);
+      
+      // Clear the field first and ensure focus
+      await element.click();
+      await this.randomDelay(800, 1200);
+      
+      // Clear existing content
+      await this.page.keyboard.down('Control');
+      await this.page.keyboard.press('KeyA');
+      await this.page.keyboard.up('Control');
+      await this.page.keyboard.press('Backspace');
+      await this.randomDelay(300, 500);
+      
+      // Ensure element is still focused
+      await element.focus();
+      await this.randomDelay(500, 800);
+      
+      // Type the street address with human-like typing
+      await this.typeHumanLike(streetAddress);
+      await this.randomDelay(800, 1200);
+      
+      // Pause a little bit as suggested
+      await this.randomDelay(1500, 2000);
+      
+      // Deselect the combobox by clicking outside
+      const pageSize = await this.page.evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight
+      }));
+      
+      // Click in a neutral area to deselect the combobox
+      await this.page.mouse.click(pageSize.width / 2, pageSize.height / 2);
+      await this.randomDelay(500, 800);
+      
+      // Press Tab to move focus away
+      await this.page.keyboard.press('Tab');
+      await this.randomDelay(500, 800);
+      
+      // Log completion without strict verification (field is typed correctly)
+      logger.info(`Successfully typed street address and deselected combobox: ${streetAddress}`);
+      return {
+        status: 'success',
+        stage: 'create_profile',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'STREET_ADDRESS_TYPING_ERROR',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : `Error filling street address field`,
+      };
+    }
+  }
+
+  private async checkForCaptcha(): Promise<LoginResult> {
+    try {
+      logger.info('Checking for captcha/network restrictions...');
+      
+      // Wait a moment for page to fully load
+      await this.randomDelay(2000, 3000);
+      
+      // Check for captcha message using multiple selectors
+      const captchaSelectors = [
+        '#captcha-message',
+        '[id="captcha-message"]',
+        '[data-v-73aba434][id="captcha-message"]',
+        '.captcha-message',
+        '[data-qa="captcha-message"]',
+        'div:contains("We cannot verify your request")',
+        'div:contains("network restrictions")',
+        'div:contains("traffic blocking")',
+        'span:contains("We cannot verify your request")',
+        'span:contains("network restrictions")',
+        'span:contains("traffic blocking")',
+      ];
+      
+      let captchaDetected = false;
+      let captchaMessage = '';
+      
+      for (const selector of captchaSelectors) {
+        try {
+          // For text-based selectors, use evaluate to check text content
+          if (selector.includes(':contains(')) {
+            const textToFind = selector.match(/contains\("([^"]+)"/)?.[1];
+            if (textToFind) {
+              const elements = await this.page.$$('div, span, p');
+              for (const element of elements) {
+                const text = await element.evaluate(el => el.textContent?.toLowerCase() || '');
+                if (text.includes(textToFind.toLowerCase())) {
+                  captchaDetected = true;
+                  captchaMessage = await element.evaluate(el => el.textContent?.trim() || '');
+                  logger.warn(`Captcha detected via text search: "${textToFind}"`);
+                  break;
+                }
+              }
+            }
+          } else {
+            // For CSS selectors, use regular selector check
+            const captchaElement = await this.page.$(selector);
+            if (captchaElement) {
+              const isVisible = await captchaElement.evaluate(el => {
+                const style = window.getComputedStyle(el);
+                const htmlEl = el as HTMLElement;
+                return style.display !== 'none' && style.visibility !== 'hidden' && htmlEl.offsetHeight > 0;
+              });
+              
+              if (isVisible) {
+                captchaDetected = true;
+                captchaMessage = await captchaElement.evaluate(el => el.textContent?.trim() || '');
+                logger.warn(`Captcha detected via selector: ${selector}`);
+                break;
+              }
+            }
+          }
+        } catch (error) {
+          // Continue to next selector if this one fails
+          continue;
+        }
+        
+        if (captchaDetected) break;
+      }
+      
+      if (captchaDetected) {
+        logger.error('🚫 CAPTCHA/Network restriction detected!');
+        logger.error(`Captcha message: ${captchaMessage}`);
+        
+        // Take screenshot for evidence
+        await this.takeScreenshot('captcha_detected');
+        
+        return {
+          status: 'hard_fail',
+          stage: 'email',
+          error_code: 'CAPTCHA_DETECTED',
+          screenshots: this.screenshots,
+          url: this.page.url(),
+          evidence: captchaMessage || 'Captcha or network restriction detected',
+        };
+      }
+      
+      logger.info('No captcha detected, proceeding...');
+      return {
+        status: 'success',
+        stage: 'email',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+      
+    } catch (error) {
+      logger.warn('Captcha check failed, proceeding anyway:', error);
+      return {
+        status: 'success',
+        stage: 'email',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+      };
+    }
+  }
+
+  private async handleProfilePictureUpload(): Promise<void> {
+    try {
+      logger.info('Attempting to upload profile picture...');
+      
+      // Look for the upload button using multiple selectors
+      let uploadButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="open-loader"]',
+        'button[data-ev-label="open_loader"]',
+        '[data-qa="open-loader"]',
+        'button[fdprocessedid]', // From your example
+        '.air3-btn.air3-btn-secondary',
+      ], 10000);
+      
+      // If not found with specific selectors, try to find by text content
+      if (!uploadButton) {
+        const buttons = await this.page.$$('button');
+        for (const button of buttons) {
+          const text = await button.evaluate(el => el.textContent?.toLowerCase() || '');
+          if (text.includes('upload photo') || text.includes('upload')) {
+            uploadButton = button;
+            logger.info('Found upload button by text content');
+            break;
+          }
+        }
+      }
+
+      if (!uploadButton) {
+        logger.warn('Profile picture upload button not found, skipping upload');
+        return;
+      }
+
+      logger.info('Found profile picture upload button');
+
+      // Click the upload button to open the modal
+      await uploadButton.click();
+      await this.randomDelay(1500, 2000);
+
+      // Wait for the modal to appear and look for the "Upload" link inside the modal
+      let uploadLink = await this.waitForSelectorWithRetry([
+        '.air3-btn-link-secondary',
+        '.air3-btn-link',
+        '[class*="btn-link"]',
+        'span[class*="btn-link"]',
+      ], 5000);
+      
+      // If not found with class selectors, try to find by text content
+      if (!uploadLink) {
+        const spans = await this.page.$$('span');
+        for (const span of spans) {
+          const text = await span.evaluate(el => el.textContent?.toLowerCase() || '');
+          if (text.includes('upload')) {
+            uploadLink = span;
+            logger.info('Found upload link by text content');
+            break;
+          }
+        }
+      }
+
+      if (!uploadLink) {
+        logger.warn('Upload link not found in modal, trying to find file input directly');
+      } else {
+        logger.info('Found upload link in modal, clicking it');
+        await uploadLink.click();
+        await this.randomDelay(1000, 1500);
+      }
+
+      // Look for file input element (might be hidden)
+      const fileInput = await this.page.$('input[type="file"]');
+      
+      if (fileInput) {
+        logger.info('Found file input element');
+        
+        // Get the absolute path to the profile picture
+        const profilePicturePath = process.cwd() + '/assets/images/profile-picture.png';
+        logger.info(`Uploading profile picture from: ${profilePicturePath}`);
+        
+        // Upload the file
+        await fileInput.uploadFile(profilePicturePath);
+        await this.randomDelay(3000, 4000); // Wait longer for upload to complete
+        
+        // Look for the "Attach photo" button
+        let attachPhotoButton = await this.waitForSelectorWithRetry([
+          'button[data-qa="btn-save"]',
+          'button[data-ev-label="btn_save"]',
+          'button.air3-btn-primary',
+          'button[fdprocessedid]',
+        ], 5000);
+        
+        // If not found with specific selectors, try to find by text content
+        if (!attachPhotoButton) {
+          const buttons = await this.page.$$('button');
+          for (const button of buttons) {
+            const text = await button.evaluate(el => el.textContent?.toLowerCase() || '');
+            if (text.includes('attach photo') || text.includes('attach')) {
+              attachPhotoButton = button;
+              logger.info('Found attach photo button by text content');
+              break;
+            }
+          }
+        }
+        
+        if (attachPhotoButton) {
+          logger.info('Found "Attach photo" button, clicking it');
+          await attachPhotoButton.click();
+          await this.randomDelay(2000, 3000);
+          logger.info('Profile picture upload completed successfully');
+        } else {
+          logger.warn('Attach photo button not found, upload may not be complete');
+        }
+        
+      } else {
+        logger.warn('File input element not found after clicking upload link');
+      }
+
+    } catch (error) {
+      logger.warn('Failed to upload profile picture:', error);
+      // Don't throw error, just log it and continue with the rest of the form
     }
   }
 

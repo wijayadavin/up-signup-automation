@@ -59,6 +59,16 @@ export class UpworkService {
       
       page = await this.browserManager.newPage();
       
+      // Check and log current IP address before visiting
+      const currentIP = await this.browserManager.getCurrentIP(page);
+      if (currentIP) {
+        logger.info({ 
+          currentIP,
+          proxyEnabled: this.browserManager.isProxyEnabled(),
+          mode: 'visit'
+        }, 'Visit mode - navigating with current IP');
+      }
+      
       // Navigate to login page
       logger.info(`Navigating to: ${this.config.loginUrl}`);
       await page.goto(this.config.loginUrl, {
@@ -117,6 +127,108 @@ export class UpworkService {
     }
   }
 
+  async checkLoginStatus(keepOpen: boolean = false): Promise<boolean> {
+    let page: Page | null = null;
+    
+    try {
+      logger.info('Checking login status (debug mode)...');
+      
+      page = await this.browserManager.newPage();
+      
+      // Check and log current IP address before debug check
+      const currentIP = await this.browserManager.getCurrentIP(page);
+      if (currentIP) {
+        logger.info({ 
+          currentIP,
+          proxyEnabled: this.browserManager.isProxyEnabled(),
+          mode: 'debug'
+        }, 'Debug mode - checking with current IP');
+      }
+      
+      // Navigate to login page
+      logger.info(`Navigating to: ${this.config.loginUrl}`);
+      await page.goto(this.config.loginUrl, {
+        waitUntil: 'networkidle2',
+        timeout: 30000,
+      });
+
+      // Wait for page to load completely
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // Check current URL to see if we were redirected
+      const currentUrl = page.url();
+      logger.info(`Current URL after navigation: ${currentUrl}`);
+
+      // Check if we were redirected to create profile page (already logged in)
+      if (currentUrl.includes('/nx/create-profile/')) {
+        logger.info('✅ Already logged in! Redirected to create profile page');
+        
+        // Take a screenshot for debugging
+        try {
+          await page.screenshot({ 
+            path: `./screenshots/debug-already-logged-in-${Date.now()}.png`,
+            fullPage: true 
+          });
+          logger.info('Screenshot saved: debug-already-logged-in');
+        } catch (screenshotError) {
+          logger.warn('Failed to take screenshot, continuing...');
+        }
+
+        return true;
+      } else if (currentUrl.includes('/ab/account-security/login')) {
+        logger.info('❌ Not logged in - still on login page');
+        
+        // Take a screenshot for debugging
+        try {
+          await page.screenshot({ 
+            path: `./screenshots/debug-not-logged-in-${Date.now()}.png`,
+            fullPage: true 
+          });
+          logger.info('Screenshot saved: debug-not-logged-in');
+        } catch (screenshotError) {
+          logger.warn('Failed to take screenshot, continuing...');
+        }
+
+        // Report status only - visit-login should not perform automation
+        logger.info('📋 Login Status: Not logged in');
+        logger.info('💡 To perform login automation, use: npm start process-users');
+        
+        return false;
+      } else {
+        logger.info(`⚠️ Unknown page: ${currentUrl}`);
+        
+        // Take a screenshot for debugging
+        try {
+          await page.screenshot({ 
+            path: `./screenshots/debug-unknown-page-${Date.now()}.png`,
+            fullPage: true 
+          });
+          logger.info('Screenshot saved: debug-unknown-page');
+        } catch (screenshotError) {
+          logger.warn('Failed to take screenshot, continuing...');
+        }
+
+        return false;
+      }
+
+    } catch (error) {
+      logger.error(error, 'Failed to check login status');
+      return false;
+    } finally {
+      // Only close the page if not keeping it open
+      if (page && !keepOpen) {
+        try {
+          logger.info('Closing page (keepOpen=false)');
+          await page.close();
+        } catch (error) {
+          // Page might already be closed
+        }
+      } else if (page && keepOpen) {
+        logger.info('Keeping page open (keepOpen=true)');
+      }
+    }
+  }
+
   async processUser(user: User): Promise<{
     success: boolean;
     errorCode?: string;
@@ -139,6 +251,17 @@ export class UpworkService {
       
       // Clear browser state to ensure we start fresh for each user
       await this.browserManager.clearBrowserState(page);
+      
+      // Check and log current IP address before starting automation
+      const currentIP = await this.browserManager.getCurrentIP(page);
+      if (currentIP) {
+        logger.info({ 
+          userId: user.id,
+          email: user.email,
+          currentIP,
+          proxyEnabled: this.browserManager.isProxyEnabled()
+        }, 'Starting automation with current IP');
+      }
       
       const loginAutomation = new LoginAutomation(page, user);
       const loginResult = await loginAutomation.execute();
@@ -178,12 +301,28 @@ export class UpworkService {
           errorMessage: loginResult.evidence || 'Soft failure during login',
           loginResult
         };
-      } else {
+      } else if (loginResult.status === 'hard_fail') {
+        // Handle captcha detection - flag user for captcha
+        if (loginResult.error_code === 'CAPTCHA_DETECTED') {
+          await this.userService.updateUserCaptchaFlag(user.id, {
+            captcha_flagged_at: new Date(),
+          });
+          logger.info({ userId: user.id }, 'User flagged for captcha due to network restriction/captcha');
+        }
+        
         // Hard failures - update with error info
         return {
           success: false,
           errorCode: loginResult.error_code,
           errorMessage: loginResult.evidence || 'Hard failure during login',
+          loginResult
+        };
+      } else {
+        // Unknown status - fallback
+        return {
+          success: false,
+          errorCode: 'UNKNOWN_STATUS',
+          errorMessage: `Unknown login result status: ${loginResult.status}`,
           loginResult
         };
       }

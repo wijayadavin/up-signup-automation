@@ -34,6 +34,13 @@ const visitLoginPageCmd = command({
       description: 'Keep browser open indefinitely (only close on error)',
       defaultValue: () => false,
     }),
+    debug: flag({
+      type: boolean,
+      long: 'debug',
+      short: 'd',
+      description: 'Debug mode: check login status only (no automation)',
+      defaultValue: () => false,
+    }),
   },
   handler: async (args) => {
     let upworkService: UpworkService | null = null;
@@ -45,13 +52,22 @@ const visitLoginPageCmd = command({
       await runMigrations();
       
       // Initialize services
-      const browserManager = new BrowserManager({ headless: args.headless });
+      const browserManager = new BrowserManager({ 
+        headless: args.headless,
+        debug: args.debug 
+      });
       const userService = new UserService();
       upworkService = new UpworkService(browserManager, userService);
       
       // Visit login page
-      logger.info(`Keep open mode: ${args.keepOpen}`);
-      const success = await upworkService.visitLoginPage(args.keepOpen);
+      logger.info(`Keep open mode: ${args.keepOpen}, Debug mode: ${args.debug}`);
+      
+      let success: boolean;
+      if (args.debug) {
+        success = await upworkService.checkLoginStatus(args.keepOpen);
+      } else {
+        success = await upworkService.visitLoginPage(args.keepOpen);
+      }
       
       if (success) {
         logger.info('Successfully visited Upwork login page');
@@ -258,7 +274,10 @@ const processUsersCmd = command({
       await runMigrations();
       
       // Initialize services
-      const browserManager = new BrowserManager({ headless: args.headless });
+      const browserManager = new BrowserManager({ 
+        headless: args.headless,
+        debug: false  // process-users always uses rotating mode for production
+      });
       const userService = new UserService();
       const upworkService = new UpworkService(browserManager, userService);
       
@@ -330,7 +349,10 @@ const testProxyCmd = command({
       logger.info('Testing proxy configuration...');
       
       // Initialize browser manager
-      const browserManager = new BrowserManager({ headless: args.headless });
+      const browserManager = new BrowserManager({ 
+        headless: args.headless,
+        debug: false  // test-proxy uses rotating mode to test production configuration
+      });
       
       // Log proxy configuration
       if (browserManager.isProxyEnabled()) {
@@ -339,24 +361,15 @@ const testProxyCmd = command({
           ? `${proxyInfo.country}.decodo.com`
           : proxyInfo?.host;
         
-        // Construct the full username for display
-        let displayUsername = proxyInfo?.username;
-        const hasCountryInUsername = proxyInfo?.username?.includes('-country-');
-        const hasZipInUsername = proxyInfo?.username?.includes('-zip-');
-        
-        if (!hasCountryInUsername && proxyInfo?.country && proxyInfo?.zipCode) {
-          displayUsername = `${proxyInfo.username}-country-${proxyInfo.country}-zip-${proxyInfo.zipCode}`;
-        } else if (!hasCountryInUsername && proxyInfo?.country) {
-          displayUsername = `${proxyInfo.username}-country-${proxyInfo.country}`;
-        }
-        
+        const proxyMode = proxyInfo?.port === 10001 ? 'sticky (debug)' : 'rotating (production)';
         logger.info({ 
           proxyHost,
           proxyPort: proxyInfo?.port,
+          proxyMode,
           proxyCountry: proxyInfo?.country,
           proxyZipCode: proxyInfo?.zipCode,
           proxyRotateMinutes: proxyInfo?.rotateMinutes,
-          proxyUsername: displayUsername
+          proxyUsername: proxyInfo?.username
         }, 'Decodo proxy configuration detected');
         
         // Test proxy by visiting a simple page
