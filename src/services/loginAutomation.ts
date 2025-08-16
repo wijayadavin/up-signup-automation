@@ -1293,7 +1293,7 @@ export class LoginAutomation {
   }
 
   private getStepIndex(stepName: string): number {
-    const steps = ['experience', 'goal', 'work_preference', 'resume_import', 'education', 'languages', 'skills', 'overview', 'rate', 'location', 'general', 'categories', 'skills_selection', 'title', 'employment'];
+    const steps = ['experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'location'];
     const index = steps.indexOf(stepName);
     return index >= 0 ? index : 0; // Default to first step if not found
   }
@@ -1342,7 +1342,7 @@ export class LoginAutomation {
 
       // Handle steps sequentially starting from current step
       let currentStepIndex = this.getStepIndex(currentStep);
-      const steps = ['experience', 'goal', 'work_preference', 'resume_import', 'education', 'languages', 'skills', 'overview', 'rate', 'location', 'general', 'categories', 'skills_selection', 'title', 'employment'];
+      const steps = ['experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'location'];
       
       // Execute remaining steps in order
       for (let i = currentStepIndex; i < steps.length; i++) {
@@ -3058,17 +3058,55 @@ export class LoginAutomation {
         await locationInput.evaluate((el: Element) => (el as HTMLInputElement).value = ''); // Clear field
         await this.typeHumanLike('New York');
         await this.randomDelay(1000, 2000);
+        
+        // Verify the value was entered correctly
+        const enteredValue = await locationInput.evaluate((el: Element) => (el as HTMLInputElement).value);
+        logger.info(`Location field value: "${enteredValue}"`);
+        
+        if (enteredValue !== 'New York') {
+          logger.warn('Location value not set correctly, trying again...');
+          await locationInput.evaluate((el: Element) => (el as HTMLInputElement).value = 'New York');
+          await this.randomDelay(500, 1000);
+        }
+        
+        // Deselect the combobox by clicking outside or pressing Tab
+        await this.page.keyboard.press('Tab');
+        await this.randomDelay(500, 1000);
+        
+        // Alternative: click outside the field
+        const pageSize = await this.page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+        await this.page.mouse.click(pageSize.width / 2, pageSize.height / 2);
+        await this.randomDelay(500, 1000);
+        
+        logger.info('Location field filled and deselected successfully');
       } else {
         logger.warn('Location input not found, skipping...');
       }
 
-      // Check "I am currently working in this role" checkbox first
-      const currentlyWorkingCheckbox = await this.waitForSelectorWithRetry([
-        'input[type="checkbox"]',
+      // Check "I am currently working in this role" checkbox
+      logger.info('Looking for "currently working" checkbox...');
+      let currentlyWorkingCheckbox = await this.waitForSelectorWithRetry([
         'label[data-test="checkbox-label"]',
+        'input[type="checkbox"]',
       ], 10000);
 
       let isCurrentlyWorking = false;
+      
+      // If not found with CSS selectors, try text-based search
+      if (!currentlyWorkingCheckbox) {
+        logger.warn('Checkbox not found with CSS selectors, trying text-based search...');
+        const allCheckboxLabels = await this.page.$$('label[data-test="checkbox-label"], label.air3-checkbox-label');
+        
+        for (const label of allCheckboxLabels) {
+          const text = await label.evaluate(el => el.textContent?.trim() || '');
+          if (text.includes('I am currently working in this role')) {
+            logger.info(`Found "currently working" checkbox via text search: "${text}"`);
+            currentlyWorkingCheckbox = label;
+            break;
+          }
+        }
+      }
+
       if (currentlyWorkingCheckbox) {
         const labelText = await currentlyWorkingCheckbox.evaluate((el: Element) => {
           // If it's a label, get its text content
@@ -3079,6 +3117,8 @@ export class LoginAutomation {
           const label = el.closest('label');
           return label ? label.textContent?.trim() || '' : '';
         });
+        
+        logger.info(`Checkbox label text: "${labelText}"`);
         
         if (labelText.includes('I am currently working in this role')) {
           logger.info('Found "currently working" checkbox, checking it...');
@@ -3101,10 +3141,14 @@ export class LoginAutomation {
             logger.info('"Currently working" checkbox already checked');
             isCurrentlyWorking = true;
           }
+        } else {
+          logger.warn(`Checkbox found but wrong text: "${labelText}"`);
         }
+      } else {
+        logger.warn('"Currently working" checkbox not found, continuing without it...');
       }
 
-      // Country dropdown is probably already set to United States, check if we need to change it
+      // Handle country dropdown with improved strategy
       const countryDropdown = await this.waitForSelectorWithRetry([
         'div[data-test="dropdown-toggle"][aria-labelledby="location-label"]',
         'div[role="combobox"][aria-labelledby="location-label"]',
@@ -3112,28 +3156,105 @@ export class LoginAutomation {
       ], 10000);
 
       if (countryDropdown) {
-        const currentCountry = await countryDropdown.evaluate((el: Element) => {
-          const label = el.querySelector('.air3-dropdown-toggle-label');
-          return label ? label.textContent?.trim() || '' : '';
-        });
+        // Convert country code to full name
+        const countryCode = this.user?.country_code || 'US';
+        let expectedCountry = 'United States'; // Default
         
-        if (!currentCountry.includes('United States')) {
-          logger.info('Clicking country dropdown to select United States...');
+        switch (countryCode) {
+          case 'US':
+            expectedCountry = 'United States';
+            break;
+          case 'ID':
+            expectedCountry = 'Indonesia';
+            break;
+          case 'UA':
+            expectedCountry = 'Ukraine';
+            break;
+          case 'UK':
+            expectedCountry = 'United Kingdom';
+            break;
+          default:
+            expectedCountry = 'United States'; // Fallback
+        }
+        
+        logger.info(`Setting country to: ${expectedCountry} (from code: ${countryCode})`);
+        
+        // Click dropdown to open
+        await countryDropdown.click();
+        await this.randomDelay(500, 1000);
+        
+        // First, ensure the dropdown is open by checking for the dropdown menu container
+        logger.info('Checking if country dropdown is open...');
+        let dropdownMenu = await this.page.$('.air3-dropdown-menu-container, [role="listbox"], .dropdown-menu, [data-test="dropdown-menu"]');
+        
+        if (!dropdownMenu) {
+          logger.info('Dropdown menu not open, clicking country dropdown to open it...');
           await countryDropdown.click();
-          await this.randomDelay(500, 1000);
-
-          // Select United States
-          const usOption = await this.waitForSelectorWithRetry([
-            '[role="option"]:contains("United States")',
-            'li:contains("United States")',
+          await this.randomDelay(1000, 2000);
+          
+          // Wait for dropdown menu to appear with broader selectors
+          dropdownMenu = await this.waitForSelectorWithRetry([
+            '.air3-dropdown-menu-container',
+            '[role="listbox"]',
+            '.dropdown-menu',
+            '[data-test="dropdown-menu"]',
+            'div[role="presentation"]',
+            '.air3-dropdown-menu',
           ], 5000);
-
-          if (usOption) {
-            await usOption.click();
-            await this.randomDelay(500, 1000);
+          
+          if (!dropdownMenu) {
+            logger.warn('Country dropdown menu did not open after clicking');
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'COUNTRY_DROPDOWN_NOT_OPEN',
+              screenshots: this.screenshots,
+              url: currentUrl,
+              evidence: 'Country dropdown menu did not open',
+            };
           }
+        }
+        
+        logger.info('Country dropdown menu is open, looking for search input...');
+        
+        // Look for search input within the dropdown menu container or anywhere on the page
+        let searchInput = await dropdownMenu.$('input[type="search"], input[type="text"], input[placeholder*="search"], input[placeholder*="Search"]');
+        
+        // If not found within dropdown, try to find it anywhere on the page
+        if (!searchInput) {
+          logger.info('Search input not found within dropdown container, looking anywhere on page...');
+          searchInput = await this.page.$('input[type="search"], input[type="text"], input[placeholder*="search"], input[placeholder*="Search"]');
+        }
+        
+        if (searchInput) {
+          logger.info('Found search input in country dropdown, clicking and typing country name...');
+          await searchInput.click();
+          await this.randomDelay(500, 1000);
+          await searchInput.evaluate((el: Element) => (el as HTMLInputElement).value = ''); // Clear field
+          await this.typeHumanLike(expectedCountry);
+          await this.randomDelay(1000, 2000);
+          
+          // Press down arrow to select the first match
+          await this.page.keyboard.press('ArrowDown');
+          await this.randomDelay(500, 1000);
+          
+          // Press Enter to confirm selection
+          await this.page.keyboard.press('Enter');
+          await this.randomDelay(500, 1000);
+          
+          logger.info(`Successfully selected country: ${expectedCountry}`);
         } else {
-          logger.info('Country already set to United States');
+          logger.warn('Search input not found in dropdown menu, trying direct option selection...');
+          // Fallback: try to find the option directly within the dropdown
+          const countryOption = await dropdownMenu.$(`[role="option"]:contains("${expectedCountry}"), li:contains("${expectedCountry}"), div:contains("${expectedCountry}")`);
+          
+          if (countryOption) {
+            await countryOption.click();
+            await this.randomDelay(500, 1000);
+            logger.info(`Selected country via direct option: ${expectedCountry}`);
+          } else {
+            logger.warn(`Country option "${expectedCountry}" not found in dropdown`);
+          }
         }
       } else {
         logger.warn('Country dropdown not found, skipping...');
@@ -3150,16 +3271,10 @@ export class LoginAutomation {
         await startMonthDropdown.click();
         await this.randomDelay(500, 1000);
         
-        // Look for January option
-        const januaryOption = await this.waitForSelectorWithRetry([
-          '[role="option"]:contains("January")',
-          'li:contains("January")',
-        ], 5000);
-        
-        if (januaryOption) {
-          await januaryOption.click();
-          await this.randomDelay(500, 1000);
-        }
+        // Simply press Enter to select the first option (January)
+        await this.page.keyboard.press('Enter');
+        await this.randomDelay(500, 1000);
+        logger.info('Selected first month option (January)');
       } else {
         logger.warn('Start month dropdown not found, skipping...');
       }
@@ -3171,19 +3286,42 @@ export class LoginAutomation {
       ], 5000);
 
       if (startYearDropdown) {
-        logger.info('Filling start year...');
+        logger.info('Filling start year with improved strategy...');
         await startYearDropdown.click();
         await this.randomDelay(500, 1000);
         
-        // Look for 2020 option
-        const year2020Option = await this.waitForSelectorWithRetry([
-          `[role="option"]:contains("${employmentData.work_start_year}")`,
-          `li:contains("${employmentData.work_start_year}")`,
-        ], 5000);
+        // Look for search input in dropdown menu
+        const searchInput = await this.page.$('.air3-dropdown-menu-container input[type="search"], .air3-dropdown-menu-container input[type="text"]');
         
-        if (year2020Option) {
-          await year2020Option.click();
+        if (searchInput) {
+          logger.info('Found search input in year dropdown, typing year...');
+          await searchInput.click();
           await this.randomDelay(500, 1000);
+          await searchInput.evaluate((el: Element) => (el as HTMLInputElement).value = ''); // Clear field
+          await this.typeHumanLike(employmentData.work_start_year);
+          await this.randomDelay(500, 1000);
+          
+          // Press down arrow to select the first match
+          await this.page.keyboard.press('ArrowDown');
+          await this.randomDelay(500, 1000);
+          
+          // Press Enter to confirm selection
+          await this.page.keyboard.press('Enter');
+          await this.randomDelay(500, 1000);
+          
+          logger.info(`Successfully selected start year: ${employmentData.work_start_year}`);
+        } else {
+          logger.warn('Search input not found in year dropdown, trying direct option selection...');
+          // Fallback: try to find the option directly
+          const yearOption = await this.waitForSelectorWithRetry([
+            `[role="option"]:contains("${employmentData.work_start_year}")`,
+            `li:contains("${employmentData.work_start_year}")`,
+          ], 5000);
+          
+          if (yearOption) {
+            await yearOption.click();
+            await this.randomDelay(500, 1000);
+          }
         }
       } else {
         logger.warn('Start year dropdown not found, skipping...');
