@@ -6,6 +6,7 @@ const logger = getLogger(import.meta.url);
 
 export interface ImportCsvOptions {
 	file: string;
+	force?: boolean;
 }
 
 export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ imported: number; skipped: number; }>{
@@ -32,6 +33,12 @@ export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ impo
 		const successAtStr = record['success_at'];
 		const lastErrorCode = record['last_error_code'] ?? null;
 		const lastErrorMessage = record['last_error_message'] ?? null;
+		
+		// Location fields
+		const locationStreetAddress = record['location_street_address'] ?? null;
+		const locationCity = record['location_city'] ?? null;
+		const locationState = record['location_state'] ?? null;
+		const locationPostCode = record['location_post_code'] ?? null;
 
 		if (!firstName || !lastName || !email || !password) {
 			logger.warn({ email }, 'Skipping row: missing required fields');
@@ -41,9 +48,22 @@ export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ impo
 
 		const existing = await userService.getUserByEmail(email);
 		if (existing) {
-			logger.info({ email }, 'Skipping existing user');
-			skipped++;
-			continue;
+			if (opts.force) {
+				logger.info({ email }, 'Force updating existing user');
+				// Update existing user with new data
+				await userService.updateUserLocation(existing.id, {
+					location_street_address: locationStreetAddress,
+					location_city: locationCity,
+					location_state: locationState,
+					location_post_code: locationPostCode,
+				});
+				imported++;
+				continue;
+			} else {
+				logger.info({ email }, 'Skipping existing user');
+				skipped++;
+				continue;
+			}
 		}
 
 		// Create base user
@@ -71,6 +91,17 @@ export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ impo
 					success_at: new Date(successAtStr),
 				});
 			}
+		}
+
+		// Update location fields if provided
+		const hasLocationData = locationStreetAddress || locationCity || locationState || locationPostCode;
+		if (hasLocationData) {
+			await userService.updateUserLocation(created.id, {
+				location_street_address: locationStreetAddress,
+				location_city: locationCity,
+				location_state: locationState,
+				location_post_code: locationPostCode,
+			});
 		}
 		imported++;
 	}

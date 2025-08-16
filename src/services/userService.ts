@@ -147,6 +147,34 @@ export class UserService {
     }
   }
 
+  async updateUserLocation(id: number, input: {
+    location_street_address?: string | null;
+    location_city?: string | null;
+    location_state?: string | null;
+    location_post_code?: string | null;
+  }): Promise<User> {
+    try {
+      const [user] = await this.db
+        .updateTable('users')
+        .set({
+          location_street_address: input.location_street_address,
+          location_city: input.location_city,
+          location_state: input.location_state,
+          location_post_code: input.location_post_code,
+          updated_at: new Date(),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .execute();
+
+      logger.info({ userId: id }, 'User location updated');
+      return user;
+    } catch (error) {
+      logger.error(error, 'Failed to update user location');
+      throw error;
+    }
+  }
+
   async getAllUsers(): Promise<User[]> {
     try {
       const users = await this.db

@@ -143,11 +143,12 @@ const importCsvCmd = command({
   description: 'Import users from a CSV file',
   args: {
     file: option({ type: string, long: 'file', short: 'f', description: 'Path to CSV file' }),
+    force: flag({ long: 'force', short: 'F', description: 'Force update existing users' }),
   },
   handler: async (args) => {
     try {
       await runMigrations();
-      const result = await importUsersFromCsv({ file: args.file });
+      const result = await importUsersFromCsv({ file: args.file, force: args.force });
       logger.info(result, 'CSV import completed');
       await closeDatabase();
     } catch (error) {

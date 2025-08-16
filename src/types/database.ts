@@ -24,6 +24,10 @@ export interface UsersTable {
   last_error_message: string | null;
   success_at: Date | null;
   captcha_flagged_at: Date | null;
+  location_street_address: string | null;
+  location_city: string | null;
+  location_state: string | null;
+  location_post_code: string | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
@@ -41,6 +45,10 @@ export interface User {
   last_error_message: string | null;
   success_at: Date | null;
   captcha_flagged_at: Date | null;
+  location_street_address: string | null;
+  location_city: string | null;
+  location_state: string | null;
+  location_post_code: string | null;
   created_at: Date;
   updated_at: Date;
 }

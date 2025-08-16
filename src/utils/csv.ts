@@ -9,6 +9,8 @@ export async function parseCsvFile(filePath: string): Promise<Array<Record<strin
 		delimiter,
 		trim: true,
 		skip_empty_lines: true,
+		relax_column_count: true, // Allow inconsistent column counts
+		relax_quotes: true, // Be more lenient with quotes
 	});
 	return records as Array<Record<string, string>>;
 }
