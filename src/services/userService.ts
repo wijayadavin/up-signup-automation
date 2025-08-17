@@ -5,7 +5,8 @@ import type {
   CreateUserInput, 
   UpdateUserAttemptInput, 
   UpdateUserSuccessInput,
-  UpdateUserCaptchaFlagInput
+  UpdateUserCaptchaFlagInput,
+  UpdateUserUpCreatedAtInput
 } from '../types/database.js';
 
 const logger = getLogger(import.meta.url);
@@ -72,6 +73,7 @@ export class UserService {
         .selectFrom('users')
         .selectAll()
         .where('success_at', 'is', null)
+        .where('up_created_at', 'is not', null)
         .orderBy('attempt_count', 'asc')
         .orderBy('created_at', 'asc')
         .limit(limit)
@@ -215,6 +217,26 @@ export class UserService {
     }
   }
 
+  async updateUserUpCreatedAt(id: number, input: UpdateUserUpCreatedAtInput): Promise<User> {
+    try {
+      const [user] = await this.db
+        .updateTable('users')
+        .set({
+          up_created_at: input.up_created_at,
+          updated_at: new Date(),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .execute();
+
+      logger.info({ userId: id, upCreatedAt: input.up_created_at }, 'User up_created_at updated');
+      return user;
+    } catch (error) {
+      logger.error(error, 'Failed to update user up_created_at');
+      throw error;
+    }
+  }
+
   async getAllUsers(): Promise<User[]> {
     try {
       const users = await this.db
@@ -252,6 +274,7 @@ export class UserService {
         .selectFrom('users')
         .select((eb) => eb.fn.countAll().as('count'))
         .where('success_at', 'is', null)
+        .where('up_created_at', 'is not', null)
         .where('attempt_count', '=', 0)
         .execute();
 

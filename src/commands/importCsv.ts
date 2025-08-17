@@ -42,6 +42,9 @@ export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ impo
 		
 		// Birth date field
 		const birthDateStr = record['birth_date'] ?? null;
+		
+		// Up created at field
+		const upCreatedAtStr = record['up_created_at'] ?? null;
 
 		if (!firstName || !lastName || !email || !password) {
 			logger.warn({ email }, 'Skipping row: missing required fields');
@@ -71,6 +74,16 @@ export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ impo
 					const birthDate = new Date(birthDateStr);
 					if (!isNaN(birthDate.getTime())) {
 						await userService.updateUserBirthDate(existing.id, birthDate);
+					}
+				}
+				
+				// Update up_created_at if provided
+				if (upCreatedAtStr) {
+					const upCreatedAt = new Date(upCreatedAtStr);
+					if (!isNaN(upCreatedAt.getTime())) {
+						await userService.updateUserUpCreatedAt(existing.id, {
+							up_created_at: upCreatedAt,
+						});
 					}
 				}
 				
@@ -126,6 +139,16 @@ export async function importUsersFromCsv(opts: ImportCsvOptions): Promise<{ impo
 			const birthDate = new Date(birthDateStr);
 			if (!isNaN(birthDate.getTime())) {
 				await userService.updateUserBirthDate(created.id, birthDate);
+			}
+		}
+
+		// Update up_created_at if provided
+		if (upCreatedAtStr) {
+			const upCreatedAt = new Date(upCreatedAtStr);
+			if (!isNaN(upCreatedAt.getTime())) {
+				await userService.updateUserUpCreatedAt(created.id, {
+					up_created_at: upCreatedAt,
+				});
 			}
 		}
 		imported++;

@@ -40,6 +40,7 @@ CREATE TABLE users (
   last_error_message TEXT,
   success_at TIMESTAMP,
   captcha_flagged_at TIMESTAMP,
+  up_created_at TIMESTAMP,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -128,6 +129,7 @@ The application provides several commands for different operations:
   - `--upload`: Test resume upload (Step 1-4 only)
   - `--no-stealth`: Disable stealth mode for debugging (use normal browser behavior)
   - `--restore-session`: Restore existing session instead of starting from login
+  - `--skip-otp`: Skip location step (except profile picture) and redirect to submit page
 - **`stats`**: View application statistics and user status
 - **`test-proxy`**: Test proxy configuration and verify IP details
 - **`import-csv`**: Bulk import users from CSV/TSV files
@@ -150,6 +152,7 @@ npm start visit-login -- --debug --headless
 npm start process-users -- --limit 5 --headless
 npm start process-users -- --upload --no-stealth
 npm start process-users -- --restore-session --no-stealth
+npm start process-users -- --skip-otp
 npm start test-proxy -- --headless
 npm start restore-session -- --user-id 1 --headful
 npm start wait-otp -- --user-id 1 --timeout 60
@@ -165,6 +168,7 @@ node dist/main.js visit-login --debug --headless
 node dist/main.js process-users --limit 5 --headless
 node dist/main.js process-users --upload --no-stealth
 node dist/main.js process-users --restore-session --no-stealth
+node dist/main.js process-users --skip-otp
 node dist/main.js restore-session --user-id 1 --headful
 node dist/main.js wait-otp --user-id 1 --timeout 60
 ```
@@ -175,6 +179,9 @@ Test the basic functionality by visiting the Upwork login page:
 ```bash
 # Run in visible mode (default)
 npm start visit-login
+
+# Visit with specific user (uses user's proxy settings)
+npm start visit-login -- --user-id 6
 
 # Run in headless mode
 npm start visit-login -- --headless
@@ -187,7 +194,15 @@ npm start visit-login -- --debug
 
 # Debug mode with headless and keep open
 npm start visit-login -- --debug --headless --keep-open
+
+# Combine options: user-specific browser with keep-open
+npm start visit-login -- --user-id 6 --keep-open
 ```
+
+**User-Specific Features:**
+- **Proxy Configuration**: When `--user-id` is provided, uses the user's specific proxy port
+- **Session Management**: Browser manager is configured with user-specific settings
+- **IP Tracking**: Logs current IP address with user context for debugging
 
 **Debug Mode Features:**
 - **Login Status Check**: Visits login page and checks if already authenticated
@@ -270,10 +285,19 @@ The automation includes:
 **Restore-Session Mode (`--restore-session`)**:
 - **Purpose**: Reuse existing saved sessions instead of performing fresh login
 - **Session Management**: Automatically restores cookies, localStorage, and browser state
+- **Session Persistence**: Automatically saves session state after successful login/restoration
 - **Use Cases**: Continue automation from where it left off, avoid repeated logins
 - **When to Use**: When users have existing sessions saved from previous runs
 - **Fallback**: If session restoration fails, automatically falls back to normal login flow
-- **Benefits**: Faster execution, reduced login attempts, better success rates
+- **Benefits**: Faster execution, reduced login attempts, better success rates, persistent sessions
+
+**Skip-OTP Mode (`--skip-otp`)**:
+- **Purpose**: Skip location step fields (except profile picture) and redirect directly to submit page
+- **Location Step Behavior**: Only uploads profile picture, skips address/phone verification
+- **Redirect**: Automatically navigates to `https://www.upwork.com/nx/create-profile/submit`
+- **Use Cases**: Bypass phone verification, complete profile creation faster
+- **When to Use**: When you want to skip the OTP verification process
+- **Benefits**: Faster profile completion, no phone verification required
 
 ## Crawl Steps & Automation Workflow
 
@@ -336,25 +360,32 @@ The automation follows a step-by-step process that mimics human behavior while h
 
 #### 6.1: Pre-onboarding
 - Takes a screenshot of the create profile page
-- Looks for the "Get Started" button
-- Clicks the button to proceed to the first step
 - Waits for navigation to complete
 
-**Step 1: Experience Selection**
-- URL: `/nx/create-profile/experience`
-- Action: Select freelancing experience level
-- Button: Click "Next" to proceed
+**Step 1: Welcome page**
+- URL: `/nx/create-profile/welcome`
+- Action: None
+- Button: Click "Get started" to proceed
 - Fallback: Direct URL navigation if button missing
 
-**Step 2: Work Goals**
-- URL: `/nx/create-profile/goal`
-- Action: Select primary work goals
+**Step 2: Experience Selection**
+- URL: `/nx/create-profile/experience`
+- Action: Click "FREELANCED_BEFORE" radio button
 - Button: Click "Next" to proceed
+- Retry Logic: Up to 2 attempts with tab+enter fallback if direct click fails
+- Fallback: Direct URL navigation if button missing
 
-**Step 3: Work Preferences**
-- URL: `/nx/create-profile/work-preference`
-- Action: Select preferred work arrangements
+**Step 3: Work Goals**
+- URL: `/nx/create-profile/goal`
+- Action: Click "EXPLORING" radio button
 - Button: Click "Next" to proceed
+- Retry Logic: Up to 2 attempts with tab+enter fallback if direct click fails
+
+**Step 4: Work Preferences**
+- URL: `/nx/create-profile/work-preference`
+- Action: If value not true yet, Click "TALENT_MARKETPLACE" checkbox (browse and bid for client jobs)
+- Button: Click "Next" to proceed
+- Retry Logic: Up to 2 attempts with tab+enter fallback (5 tabs) if direct click fails
 
 #### 6.2: Profile Creation Onboarding
 The automation follows this exact sequence through Upwork's profile creation flow.
@@ -367,16 +398,17 @@ Note that when using `--upload` flag, some might be auto-filled and can just pre
   1. Generate PDF resume using user data
   2. Click "Upload your resume" button
   3. Upload modal appears
-  4. Click "choose file" link
-  5. Upload generated PDF file
-  6. Wait for file processing (green checkmark appears)
-  7. Click "Continue" button (`data-qa="resume-upload-continue-btn"`)
-  8. Wait for upload completion and navigation
+  4. Directly upload generated PDF file to file input element
+  5. Wait for file processing (green checkmark appears)
+  6. Click "Continue" button (`data-qa="resume-upload-continue-btn"`)
+  7. Wait for upload completion and navigation
 - Features:
   - Auto-generates ATS-compliant PDF with user information
   - Includes professional title, skills, work experience, education
   - Uses clean formatting (Arial font, bullet points, clear sections)
   - PDF stored in `assets/resumes/` directory
+  - **Automated Upload**: Direct file upload without manual file selection
+  - **No Native Dialog**: Avoids browser file dialog for seamless automation
 
 **Step 2: Categories Selection**
 - URL: `/nx/create-profile/categories`
@@ -520,10 +552,18 @@ The system takes screenshots at key moments for debugging and verification:
 - **Visual Error State Detection**: Checks for error styling in input fields
 - **Proper Success/Failure Handling**: No more false success reports
 
+#### Improved Field Verification System
+- **Lenient Verification**: Checks for field content rather than exact matches to avoid false negatives
+- **Rate Field**: Verifies field has any value instead of exact match (handles formatting)
+- **Phone Field**: Verifies field has digits instead of exact match (handles formatting)
+- **Date Field**: Verifies field has any value instead of exact match (handles date formatting)
+- **Password Field**: Verifies field has any value instead of exact match (handles input delays)
+- **General Fields**: All form fields use lenient verification to prevent false failures
+
 #### Enhanced Location Step
 - **Smart Address Input**: Character-by-character typing with autocomplete selection
 - **Correct Phone Number**: No country code prefix, uses raw phone number (e.g., "2314992031")
-- **Field Verification**: Comprehensive verification of all fields before clicking Next button (except address due to autocomplete)
+- **Lenient Field Verification**: Checks for field content rather than exact matches to avoid false negatives
 - **Auto-Retry Logic**: Automatically retries failed field inputs with proper validation
 - **Smart Address Autocomplete**: Direct keyboard navigation (down arrow + enter)
 - **City Field**: Auto-detection if already filled from street address
@@ -605,6 +645,7 @@ Optional headers:
 - `last_error_message`
 - `success_at` (ISO 8601 date/time)
 - `captcha_flagged_at` (ISO 8601 date/time)
+- `up_created_at` (ISO 8601 date/time - marks user as ready for processing)
 - `location_street_address` (Street address for profile creation)
 - `location_city` (City for profile creation)
 - `location_state` (State/Province for profile creation)
@@ -633,15 +674,23 @@ Behavior:
 
 Example (tab-delimited):
 ```
-first_name	last_name	email	password	country_code	attempt_count	last_attempt_at	last_error_code	last_error_message	success_at	captcha_flagged_at	location_street_address	location_city	location_state	location_post_code	birth_date
-Zoe	Bennett	zoe.bennet03@outlook.com	workhard2025!	US	0												1200 Market St	San Francisco	California	94102	2003-04-30
+first_name	last_name	email	password	country_code	attempt_count	last_attempt_at	last_error_code	last_error_message	success_at	captcha_flagged_at	up_created_at	location_street_address	location_city	location_state	location_post_code	birth_date
+Zoe	Bennett	zoe.bennet03@outlook.com	workhard2025!	US	0												2025-08-18T10:00:00Z	1200 Market St	San Francisco	California	94102	2003-04-30
 ```
 
 ### Process Users
 Run the automation for pending users:
 
+**Important**: The `process-users` command only processes users where `up_created_at` is not null. This allows for selective processing of users who have been marked as ready for Upwork profile creation.
+
+**User Processing Filter:**
+- Only users with `up_created_at` timestamp will be processed
+- Users without `up_created_at` will be skipped (not considered "pending")
+- This allows for controlled, selective processing of users
+- Use `npm start stats` to see how many users are actually pending for processing
+
 ```bash
-# Process 5 users (default)
+# Process 5 users (default) - only users with up_created_at set
 npm start process-users
 
 # Process specific number of users
@@ -649,7 +698,18 @@ npm start process-users -- --limit 1
 
 # Run in headless mode
 npm start process-users -- --headless
+
+# Skip location step (except profile picture) and redirect to submit page
+npm start process-users -- --skip-otp
+
+# Combine flags for different scenarios
+npm start process-users -- --upload --restore-session --skip-otp --limit 1
 ```
+
+**User Processing Filter:**
+- Only users with `up_created_at` timestamp will be processed
+- Users without `up_created_at` will be skipped (not considered "pending")
+- This allows for controlled, selective processing of users
 
 ### View Statistics
 Check the current status:

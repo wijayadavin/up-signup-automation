@@ -24,6 +24,12 @@ const visitLoginPageCmd = command({
   name: 'visit-login',
   description: 'Visit the Upwork login page',
   args: {
+    userId: option({
+      type: number,
+      long: 'user-id',
+      short: 'u',
+      description: 'User ID to use for the session (optional)',
+    }),
     headless: flag({
       type: boolean,
       long: 'headless',
@@ -63,13 +69,13 @@ const visitLoginPageCmd = command({
       upworkService = new UpworkService(browserManager, userService);
       
       // Visit login page
-      logger.info(`Keep open mode: ${args.keepOpen}, Debug mode: ${args.debug}`);
+      logger.info(`User ID: ${args.userId || 'none'}, Keep open mode: ${args.keepOpen}, Debug mode: ${args.debug}`);
       
       let success: boolean;
       if (args.debug) {
-        success = await upworkService.checkLoginStatus(args.keepOpen);
+        success = await upworkService.checkLoginStatus(args.keepOpen, args.userId);
       } else {
-        success = await upworkService.visitLoginPage(args.keepOpen);
+        success = await upworkService.visitLoginPage(args.keepOpen, args.userId);
       }
       
       if (success) {
@@ -417,6 +423,12 @@ const processUsersCmd = command({
       description: 'Restore existing session instead of starting from login',
       defaultValue: () => false,
     }),
+    skipOtp: flag({
+      type: boolean,
+      long: 'skip-otp',
+      description: 'Skip location step (except profile picture) and redirect to submit page',
+      defaultValue: () => false,
+    }),
   },
   handler: async (args) => {
     try {
@@ -442,9 +454,13 @@ const processUsersCmd = command({
         if (args.restoreSession) {
           logger.info('Restore-session mode enabled: will reuse existing sessions');
         }
+        if (args.skipOtp) {
+          logger.info('Skip-OTP mode enabled: will skip location step except profile picture and redirect to submit page');
+        }
         await upworkService.processPendingUsers(args.limit, { 
           uploadOnly: true,
-          restoreSession: args.restoreSession
+          restoreSession: args.restoreSession,
+          skipOtp: args.skipOtp
         });
       } else {
         if (args.noStealth) {
@@ -453,8 +469,12 @@ const processUsersCmd = command({
         if (args.restoreSession) {
           logger.info('Restore-session mode enabled: will reuse existing sessions');
         }
+        if (args.skipOtp) {
+          logger.info('Skip-OTP mode enabled: will skip location step except profile picture and redirect to submit page');
+        }
         await upworkService.processPendingUsers(args.limit, {
-          restoreSession: args.restoreSession
+          restoreSession: args.restoreSession,
+          skipOtp: args.skipOtp
         });
       }
       

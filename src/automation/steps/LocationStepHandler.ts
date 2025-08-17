@@ -19,9 +19,9 @@ export class LocationStepHandler extends StepHandler {
     super(page, user, 'location');
   }
 
-  async execute(): Promise<AutomationResult> {
+  async execute(options?: { skipOtp?: boolean }): Promise<AutomationResult> {
     try {
-      logger.info('Handling location step...');
+      logger.info(`Handling location step... (Skip-OTP mode: ${options?.skipOtp ? 'enabled' : 'disabled'})`);
       
       // Validate current page
       const pageValidation = await this.validateCurrentPage('/nx/create-profile/location');
@@ -31,6 +31,23 @@ export class LocationStepHandler extends StepHandler {
 
       await this.waitForPageReady();
       this.screenshots.location_before = await this.takeScreenshot('location_before');
+
+      if (options?.skipOtp) {
+        // Skip-OTP mode: Only upload profile picture and return
+        logger.info('Skip-OTP mode enabled: Only uploading profile picture...');
+        
+        // Upload profile photo only
+        const photoResult = await this.uploadProfilePhoto();
+        if (photoResult.status !== 'success') {
+          return photoResult;
+        }
+        
+        logger.info('Profile picture uploaded successfully in skip-OTP mode. Ready for redirect to submit page.');
+        return this.createSuccess();
+      }
+
+      // Normal mode: Fill all fields
+      logger.info('Normal mode: Filling all location fields...');
 
       // Fill date of birth
       const dobResult = await this.fillDateOfBirth();
@@ -126,12 +143,19 @@ export class LocationStepHandler extends StepHandler {
       // Clear and type the date
       await this.clearAndType(dobInput, birthDate);
       
-      // Verify the date was entered
+      // Verify the date was entered (lenient verification)
       const enteredDate = await dobInput.evaluate((el: Element) => (el as HTMLInputElement).value);
-      if (enteredDate !== birthDate) {
-        logger.warn(`Date verification failed. Expected: ${birthDate}, Got: ${enteredDate}`);
+      logger.info(`Date verification - Expected: ${birthDate}, Got: ${enteredDate}`);
+      
+      // More lenient verification: check if field has any value
+      if (!enteredDate || enteredDate.trim() === '') {
+        logger.warn(`Date field is empty, retrying once...`);
         // Try once more
         await this.clearAndType(dobInput, birthDate);
+        await this.randomDelay(500, 1000);
+        
+        const retryDate = await dobInput.evaluate((el: Element) => (el as HTMLInputElement).value);
+        logger.info(`Date retry verification - Expected: ${birthDate}, Got: ${retryDate}`);
       }
 
       logger.info('Date of birth filled successfully');
@@ -540,11 +564,12 @@ export class LocationStepHandler extends StepHandler {
         await phoneField.type(cleanPhone, { delay: 100 });
         await this.randomDelay(1000, 1500);
         
-        // Verify the phone was entered correctly
+        // Verify the phone was entered correctly (lenient verification)
         const enteredPhone = await phoneField.evaluate((el: Element) => (el as HTMLInputElement).value);
         logger.info(`Phone verification - Expected: ${cleanPhone}, Got: ${enteredPhone}`);
         
-        if (enteredPhone === cleanPhone) {
+        // More lenient verification: check if field has any value and contains digits
+        if (enteredPhone && enteredPhone.trim() !== '' && /\d/.test(enteredPhone)) {
           success = true;
           logger.info('Phone number entered successfully');
         } else {

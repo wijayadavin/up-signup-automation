@@ -51,13 +51,29 @@ export class UpworkService {
     }
   }
 
-  async visitLoginPage(keepOpen: boolean = false): Promise<boolean> {
+  async visitLoginPage(keepOpen: boolean = false, userId?: number): Promise<boolean> {
     let page: Page | null = null;
     
     try {
       logger.info('Starting login page visit...');
       
-      page = await this.browserManager.newPage();
+      // If userId is provided, create a user-specific browser manager
+      if (userId) {
+        const user = await this.userService.getUserById(userId);
+        if (user) {
+          logger.info({ userId, email: user.email }, 'Using user-specific browser manager');
+          const userBrowserManager = new BrowserManager({
+            headless: this.browserManager.isHeadless(),
+            user: user
+          });
+          page = await userBrowserManager.newPage();
+        } else {
+          logger.warn({ userId }, 'User not found, using default browser manager');
+          page = await this.browserManager.newPage();
+        }
+      } else {
+        page = await this.browserManager.newPage();
+      }
       
       // Check and log current IP address before visiting
       const currentIP = await this.browserManager.getCurrentIP(page);
@@ -65,7 +81,8 @@ export class UpworkService {
         logger.info({ 
           currentIP,
           proxyEnabled: this.browserManager.isProxyEnabled(),
-          mode: 'visit'
+          mode: 'visit',
+          userId: userId || 'none'
         }, 'Visit mode - navigating with current IP');
       }
       
@@ -127,13 +144,29 @@ export class UpworkService {
     }
   }
 
-  async checkLoginStatus(keepOpen: boolean = false): Promise<boolean> {
+  async checkLoginStatus(keepOpen: boolean = false, userId?: number): Promise<boolean> {
     let page: Page | null = null;
     
     try {
       logger.info('Checking login status (debug mode)...');
       
-      page = await this.browserManager.newPage();
+      // If userId is provided, create a user-specific browser manager
+      if (userId) {
+        const user = await this.userService.getUserById(userId);
+        if (user) {
+          logger.info({ userId, email: user.email }, 'Using user-specific browser manager for debug');
+          const userBrowserManager = new BrowserManager({
+            headless: this.browserManager.isHeadless(),
+            user: user
+          });
+          page = await userBrowserManager.newPage();
+        } else {
+          logger.warn({ userId }, 'User not found, using default browser manager for debug');
+          page = await this.browserManager.newPage();
+        }
+      } else {
+        page = await this.browserManager.newPage();
+      }
       
       // Check and log current IP address before debug check
       const currentIP = await this.browserManager.getCurrentIP(page);
@@ -141,7 +174,8 @@ export class UpworkService {
         logger.info({ 
           currentIP,
           proxyEnabled: this.browserManager.isProxyEnabled(),
-          mode: 'debug'
+          mode: 'debug',
+          userId: userId || 'none'
         }, 'Debug mode - checking with current IP');
       }
       
@@ -229,7 +263,7 @@ export class UpworkService {
     }
   }
 
-  async processUser(user: User, options?: { uploadOnly?: boolean; restoreSession?: boolean }): Promise<{
+  async processUser(user: User, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean }): Promise<{
     success: boolean;
     errorCode?: string;
     errorMessage?: string;
@@ -375,7 +409,7 @@ export class UpworkService {
     }
   }
 
-  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean }): Promise<void> {
+  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean }): Promise<void> {
     try {
       const users = await this.userService.getPendingUsers(limit);
       

@@ -33,6 +33,7 @@ export interface UsersTable {
   onboarding_completed_at: Date | null;
   last_session_state: string | null;
   last_proxy_port: number | null;
+  up_created_at: Date | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
@@ -59,6 +60,7 @@ export interface User {
   onboarding_completed_at: Date | null;
   last_session_state: string | null;
   last_proxy_port: number | null;
+  up_created_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -84,4 +86,8 @@ export interface UpdateUserSuccessInput {
 
 export interface UpdateUserCaptchaFlagInput {
   captcha_flagged_at: Date;
+}
+
+export interface UpdateUserUpCreatedAtInput {
+  up_created_at: Date;
 }
