@@ -30,6 +30,8 @@ export interface UsersTable {
   location_post_code: string | null;
   birth_date: Date | null;
   phone: string | null;
+  onboarding_completed_at: Date | null;
+  last_session_state: string | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
@@ -53,6 +55,8 @@ export interface User {
   location_post_code: string | null;
   birth_date: Date | null;
   phone: string | null;
+  onboarding_completed_at: Date | null;
+  last_session_state: string | null;
   created_at: Date;
   updated_at: Date;
 }

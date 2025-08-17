@@ -6,7 +6,8 @@ import { NavigationAutomation } from './NavigationAutomation';
 import { SkillsStepHandler } from './steps/SkillsStepHandler';
 import { EducationStepHandler } from './steps/EducationStepHandler';
 import { OverviewStepHandler } from './steps/OverviewStepHandler';
-import { LocationStepHandler } from './steps/LocationStepHandler';
+// import { LocationStepHandler } from './steps/LocationStepHandler'; // TODO: Re-enable when location step is fixed
+import { SessionService } from '../services/sessionService.js';
 
 // Create a simple logger for automation
 const logger = {
@@ -41,7 +42,7 @@ export class LoginAutomation extends BaseAutomation {
       ['skills', new SkillsStepHandler(page, user)],
       ['education', new EducationStepHandler(page, user)],
       ['overview', new OverviewStepHandler(page, user)],
-      ['location', new LocationStepHandler(page, user)],
+      // ['location', new LocationStepHandler(page, user)], // TODO: Re-enable when location step is fixed
       // Add more step handlers as they are created
     ]);
   }
@@ -210,15 +211,24 @@ export class LoginAutomation extends BaseAutomation {
           return stepResult;
         }
         
-        // Special handling for location step - check for phone verification
+        // Special handling for location step - skip for now and save session state
         if (stepName === 'location') {
-          logger.info('Location step completed, checking for phone verification...');
-          const phoneVerificationResult = await this.handlePhoneVerificationAfterLocation();
-          if (phoneVerificationResult.status !== 'success') {
-            logger.warn('Phone verification not completed, returning soft_fail to retry later');
-            return this.createError('PHONE_VERIFICATION_PENDING', 'Phone verification not completed, will retry later');
+          logger.info('Location step reached - SKIPPING FOR NOW (TODO: Fix location step)');
+          logger.info('Marking onboarding as completed and saving session state...');
+          
+          try {
+            // Mark onboarding as completed
+            await SessionService.markOnboardingCompleted(this.user.id);
+            
+            // Save session state
+            await SessionService.saveSessionState(this.page, this.user.id);
+            
+            logger.info('Onboarding marked as completed and session state saved');
+            return this.createSuccess('done');
+          } catch (error) {
+            logger.error('Failed to mark onboarding as completed or save session state:', error);
+            return this.createError('SESSION_SAVE_FAILED', 'Failed to save session state');
           }
-          logger.info('Phone verification completed successfully');
         }
       }
       
@@ -263,6 +273,26 @@ export class LoginAutomation extends BaseAutomation {
     // Special handling for rate step
     if (stepName === 'rate') {
       return await this.handleRateStep();
+    }
+    
+    // Special handling for location step - skip for now
+    if (stepName === 'location') {
+      logger.info('Location step reached in legacy handler - SKIPPING FOR NOW (TODO: Fix location step)');
+      logger.info('Marking onboarding as completed and saving session state...');
+      
+      try {
+        // Mark onboarding as completed
+        await SessionService.markOnboardingCompleted(this.user.id);
+        
+        // Save session state
+        await SessionService.saveSessionState(this.page, this.user.id);
+        
+        logger.info('Onboarding marked as completed and session state saved');
+        return this.createSuccess('done');
+      } catch (error) {
+        logger.error('Failed to mark onboarding as completed or save session state:', error);
+        return this.createError('SESSION_SAVE_FAILED', 'Failed to save session state');
+      }
     }
     
     // For now, just try to click next button
