@@ -9,6 +9,8 @@ import { closeDatabase } from './database/connection.js';
 import { BrowserManager } from './browser/browserManager.js';
 import { UserService } from './services/userService.js';
 import { UpworkService } from './services/upworkService.js';
+import { ResumeGenerator } from './utils/resumeGenerator.js';
+import fs from 'fs';
 
 // Load environment variables
 dotenv.config();
@@ -246,6 +248,134 @@ const addUserCmd = command({
   },
 });
 
+// Command to test resume generation
+const testResumeCmd = command({
+  name: 'test-resume',
+  description: 'Test PDF resume generation for a specific user',
+  args: {
+    userId: option({
+      type: number,
+      long: 'user-id',
+      short: 'u',
+      description: 'User ID to generate resume for (optional)',
+    }),
+    email: option({
+      type: string,
+      long: 'email',
+      short: 'e',
+      description: 'User email to generate resume for (alternative to user-id, optional)',
+    }),
+    output: option({
+      type: string,
+      long: 'output',
+      short: 'o',
+      description: 'Output directory for generated resume files',
+      defaultValue: () => './test-output',
+    }),
+    plainText: flag({
+      type: boolean,
+      long: 'plain-text',
+      short: 'p',
+      description: 'Also generate plain text version',
+      defaultValue: () => false,
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info('Starting resume generation test...');
+      
+      // Run migrations
+      await runMigrations();
+      
+      // Initialize user service
+      const userService = new UserService();
+      
+      // Get user by ID or email
+      let user;
+      if (args.userId) {
+        user = await userService.getUserById(args.userId);
+        if (!user) {
+          logger.error(`User with ID ${args.userId} not found`);
+          process.exit(1);
+        }
+      } else if (args.email) {
+        user = await userService.getUserByEmail(args.email);
+        if (!user) {
+          logger.error(`User with email ${args.email} not found`);
+          process.exit(1);
+        }
+      } else {
+        // Get first available user
+        const users = await userService.getPendingUsers(1);
+        if (users.length === 0) {
+          logger.error('No users found in database. Use add-user command first.');
+          process.exit(1);
+        }
+        user = users[0];
+        logger.info(`Using first available user: ${user.email} (ID: ${user.id})`);
+      }
+      
+      logger.info({ userId: user.id, email: user.email }, 'Generating resume for user');
+      
+      // Create output directory
+      if (!fs.existsSync(args.output)) {
+        fs.mkdirSync(args.output, { recursive: true });
+        logger.info(`Created output directory: ${args.output}`);
+      }
+      
+      // Generate PDF resume
+      logger.info('Generating PDF resume...');
+      const pdfPath = await ResumeGenerator.generateResume(user);
+      logger.info(`PDF resume generated: ${pdfPath}`);
+      
+      // Copy to output directory if different
+      if (args.output !== './assets/resumes') {
+        const outputPdfPath = `${args.output}/resume_${user.id}.pdf`;
+        fs.copyFileSync(pdfPath, outputPdfPath);
+        logger.info(`PDF copied to: ${outputPdfPath}`);
+      }
+      
+      // Generate plain text version if requested
+      if (args.plainText) {
+        logger.info('Generating plain text resume...');
+        const txtPath = await ResumeGenerator.generatePlainTextResume(user);
+        logger.info(`Plain text resume generated: ${txtPath}`);
+        
+        // Copy to output directory if different
+        if (args.output !== './assets/resumes') {
+          const outputTxtPath = `${args.output}/resume_${user.id}.txt`;
+          fs.copyFileSync(txtPath, outputTxtPath);
+          logger.info(`Plain text copied to: ${outputTxtPath}`);
+        }
+      }
+      
+      // Validate PDF file
+      const pdfStats = fs.statSync(pdfPath);
+      logger.info({ 
+        fileSize: `${(pdfStats.size / 1024).toFixed(2)} KB`,
+        filePath: pdfPath 
+      }, 'PDF file validation');
+      
+      if (pdfStats.size < 1000) {
+        logger.warn('PDF file seems very small, might be corrupted');
+      } else if (pdfStats.size > 500000) {
+        logger.warn('PDF file is larger than 500KB, might not be ATS-friendly');
+      } else {
+        logger.info('PDF file size looks good for ATS parsing');
+      }
+      
+      logger.info('Resume generation test completed successfully!');
+      
+      // Cleanup
+      await closeDatabase();
+      
+    } catch (error) {
+      logger.error(error, 'Failed to generate resume');
+      process.exit(1);
+    }
+  },
+});
+
 // Command to process pending users
 const processUsersCmd = command({
   name: 'process-users',
@@ -265,6 +395,13 @@ const processUsersCmd = command({
       description: 'Run browser in headless mode',
       defaultValue: () => false,
     }),
+    upload: flag({
+      type: boolean,
+      long: 'upload',
+      short: 'u',
+      description: 'Test upload mode: only run until Step 4 (Resume Import)',
+      defaultValue: () => false,
+    }),
   },
   handler: async (args) => {
     try {
@@ -282,7 +419,12 @@ const processUsersCmd = command({
       const upworkService = new UpworkService(browserManager, userService);
       
       // Process users
-      await upworkService.processPendingUsers(args.limit);
+      if (args.upload) {
+        logger.info('Upload mode enabled: will stop after Step 4 (Resume Import)');
+        await upworkService.processPendingUsers(args.limit, { uploadOnly: true });
+      } else {
+        await upworkService.processPendingUsers(args.limit);
+      }
       
       // Get stats
       const stats = await upworkService.getStats();
@@ -503,7 +645,9 @@ const mainCmd = command({
     logger.info('Available commands:');
     logger.info('  visit-login     - Visit the Upwork login page');
     logger.info('  add-user        - Add a new user to the database');
+    logger.info('  test-resume     - Generate and test PDF resume for a user');
     logger.info('  process-users   - Process pending users for automation');
+    logger.info('  process-users --upload  - Test resume upload (Step 1-4 only)');
     logger.info('  stats           - Show application statistics');
     logger.info('  test-proxy      - Test proxy configuration');
     logger.info('Use --help with any command for more information');
@@ -520,6 +664,9 @@ switch (commandName) {
     break;
   case 'add-user':
     await run(addUserCmd, commandArgs);
+    break;
+  case 'test-resume':
+    await run(testResumeCmd, commandArgs);
     break;
   case 'process-users':
     await run(processUsersCmd, commandArgs);

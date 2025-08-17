@@ -1,6 +1,7 @@
 import { Page, ElementHandle } from 'puppeteer';
 import { getLogger } from '../utils/logger.js';
 import type { User } from '../types/database.js';
+import { ResumeGenerator } from '../utils/resumeGenerator.js';
 
 const logger = getLogger(import.meta.url);
 
@@ -46,6 +47,7 @@ export interface LoginResult {
       modal_before_fill?: string;
       modal_after_fill?: string;
       modal_after_save?: string;
+      resume_upload_debug?: string;
   };
   url: string;
   evidence?: string;
@@ -61,7 +63,7 @@ export class LoginAutomation {
     this.user = user;
   }
 
-  async execute(): Promise<LoginResult> {
+  async execute(options?: { uploadOnly?: boolean }): Promise<LoginResult> {
     try {
       // Set desktop user agent and viewport
       await this.setupBrowser();
@@ -85,7 +87,7 @@ export class LoginAutomation {
       }
 
       // Step 4: Handle create profile
-      const profileResult = await this.handleCreateProfile();
+      const profileResult = await this.handleCreateProfile(options);
       if (profileResult.status !== 'success') {
         return profileResult;
       }
@@ -468,7 +470,7 @@ export class LoginAutomation {
     }
   }
 
-  private async handleCreateProfile(): Promise<LoginResult> {
+  private async handleCreateProfile(options?: { uploadOnly?: boolean }): Promise<LoginResult> {
     try {
       logger.info('Handling create profile page...');
 
@@ -498,19 +500,19 @@ export class LoginAutomation {
         // Take screenshot before attempting to find button
         await this.takeScreenshot('get_started_before');
         
-        const getStartedButton = await this.waitForSelectorWithRetry([
-          'button[data-qa="get-started-btn"]',
+      const getStartedButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="get-started-btn"]',
           'button[data-ev-label="get_started_btn"]',
           '[data-qa="get-started-btn"]',
           '[data-ev-label="get_started_btn"]',
           'button.air3-btn-primary',
           '.air3-btn-primary',
-        ], 15000);
-        
+      ], 15000);
+
         let buttonClicked = false;
         
         // If CSS selectors fail, try text-based search
-        if (!getStartedButton) {
+      if (!getStartedButton) {
           logger.warn('CSS selectors failed, trying text-based search...');
           const allButtons = await this.page.$$('button');
           for (const button of allButtons) {
@@ -537,35 +539,35 @@ export class LoginAutomation {
         // Check if button was found and clicked
         if (!buttonClicked) {
           logger.error('Failed to find "Get started" button');
-          return {
-            status: 'soft_fail',
-            stage: 'create_profile',
-            error_code: 'GET_STARTED_NOT_FOUND',
-            screenshots: this.screenshots,
-            url: currentUrl,
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'GET_STARTED_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
             evidence: 'Could not locate "Get started" button using any selector strategy',
-          };
-        }
+        };
+      }
 
         // Add delay after clicking for UI to respond
-        await this.randomDelay(2000, 3000);
+      await this.randomDelay(2000, 3000);
 
         // Wait for navigation to experience page
-        try {
-          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-        } catch (error) {
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
           // Check if we're on any profile creation page
           const currentUrl = this.page.url();
           if (!currentUrl.includes('/nx/create-profile/')) {
             logger.error('Navigation timeout and not on profile creation page:', currentUrl);
-            return {
-              status: 'soft_fail',
-              stage: 'create_profile',
-              error_code: 'NAVIGATION_TIMEOUT',
-              screenshots: this.screenshots,
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'NAVIGATION_TIMEOUT',
+          screenshots: this.screenshots,
               url: currentUrl,
               evidence: `Failed to navigate to profile creation page after clicking Get started. Current URL: ${currentUrl}`,
-            };
+        };
           } else {
             logger.info(`Navigation timeout but on profile creation page: ${currentUrl}, continuing...`);
           }
@@ -573,7 +575,7 @@ export class LoginAutomation {
       }
 
       // Resume from the appropriate step based on current URL
-      return await this.resumeProfileCreation();
+      return await this.resumeProfileCreation(options);
 
     } catch (error) {
       return {
@@ -757,14 +759,14 @@ export class LoginAutomation {
           }
         } else {
           logger.error('No next URL found in sequence for current page');
-          return {
-            status: 'soft_fail',
-            stage: 'create_profile',
-            error_code: 'EXPERIENCE_NEXT_NOT_FOUND',
-            screenshots: this.screenshots,
-            url: currentUrl,
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'EXPERIENCE_NEXT_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
             evidence: 'Could not locate Next button and no next URL available in sequence',
-          };
+        };
         }
       }
 
@@ -775,21 +777,21 @@ export class LoginAutomation {
       const finalUrl = this.page.url();
       if (!finalUrl.includes('/nx/create-profile/goal')) {
         logger.warn('Not on goal page yet, waiting for navigation...');
-        try {
-          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-        } catch (error) {
+      try {
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      } catch (error) {
           // Check if we're on the goal page now
-          const newUrl = this.page.url();
-          if (!newUrl.includes('/nx/create-profile/goal')) {
-            return {
-              status: 'soft_fail',
-              stage: 'create_profile',
-              error_code: 'EXPERIENCE_NAVIGATION_FAILED',
-              screenshots: this.screenshots,
-              url: newUrl,
+        const newUrl = this.page.url();
+        if (!newUrl.includes('/nx/create-profile/goal')) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'EXPERIENCE_NAVIGATION_FAILED',
+            screenshots: this.screenshots,
+            url: newUrl,
               evidence: 'Failed to navigate to goal page after button click',
-            };
-          }
+          };
+        }
         }
       } else {
         logger.info('Already on goal page (via URL fallback or button click)');
@@ -1093,7 +1095,7 @@ export class LoginAutomation {
 
   private async handleResumeImportStep(): Promise<LoginResult> {
     try {
-      logger.info('Handling resume import step...');
+      logger.info('Handling resume import step with PDF upload...');
 
       // Assert current route or try to navigate to the correct page
       const currentUrl = this.page.url();
@@ -1164,37 +1166,269 @@ export class LoginAutomation {
       await this.waitForPageReady();
       this.screenshots.resume_before = await this.takeScreenshot('resume_before');
 
-      // Click "Fill out manually" button
-      const manualButton = await this.waitForSelectorWithRetry([
-        '[role="button"][aria-label*="Fill out manually"]',
-        '[data-qa="resume-fill-manually-btn"]',
-        'button:contains("Fill out manually")',
-        'button:contains("Fill manually")',
+      // Generate PDF resume first
+      logger.info('Generating PDF resume for user...');
+      let resumePdfPath: string;
+      try {
+        resumePdfPath = await ResumeGenerator.generateResume(this.user);
+        logger.info(`Resume PDF generated at: ${resumePdfPath}`);
+      } catch (error) {
+        logger.error('Failed to generate resume PDF:', error);
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+          error_code: 'RESUME_PDF_GENERATION_FAILED',
+              screenshots: this.screenshots,
+              url: currentUrl,
+          evidence: `Failed to generate resume PDF: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        };
+      }
+
+      // Click "Upload your resume" button
+      const uploadButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="resume-upload-btn-mobile"]',
+        'button[data-ev-label="resume_upload_btn_mobile"]',
+        'button:contains("Upload your resume")',
+        'button:contains("Upload")',
+        '.air3-btn-secondary:contains("Upload")',
       ], 15000);
 
-      if (!manualButton) {
-        // Try alternative selectors
-        const altButton = await this.waitForSelectorWithRetry([
-          'button',
-          '[role="button"]',
+      if (!uploadButton) {
+        logger.warn('Upload resume button not found, trying alternative selectors...');
+        // Try to find any upload-related button
+        const altUploadButton = await this.waitForSelectorWithRetry([
+          'button[data-ev-label*="upload"]',
+          'button[data-qa*="upload"]',
+          '[role="button"]:contains("Upload")',
+          'button:contains("resume")',
         ], 5000);
         
-        if (!altButton) {
+        if (!altUploadButton) {
           return {
             status: 'soft_fail',
             stage: 'create_profile',
-            error_code: 'RESUME_MANUAL_BUTTON_NOT_FOUND',
+            error_code: 'RESUME_UPLOAD_BUTTON_NOT_FOUND',
             screenshots: this.screenshots,
             url: currentUrl,
-            evidence: 'Fill out manually button not found',
+            evidence: 'Upload resume button not found',
           };
         }
-        await altButton.click();
+        await altUploadButton.click();
       } else {
-        await manualButton.click();
+        await uploadButton.click();
       }
 
       await this.randomDelay(2000, 3000);
+
+      // Wait for upload modal to appear
+      const uploadModal = await this.waitForSelectorWithRetry([
+        '[role="dialog"]',
+        '.modal',
+        '[data-test="modal"]',
+        '.air3-modal',
+      ], 10000);
+
+      if (!uploadModal) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'RESUME_UPLOAD_MODAL_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'Resume upload modal did not appear',
+        };
+      }
+
+      logger.info('Upload modal appeared, looking for "choose file" link...');
+
+      // Look for file input directly in the modal first
+      let fileInput = await this.page.$('input[type="file"]');
+      
+      if (!fileInput) {
+        // If no file input found, look for the "choose file" link and click it
+        const chooseFileLink = await this.waitForSelectorWithRetry([
+          'a[data-ev-label="choose_file_link"]',
+          '.up-n-link:contains("choose file")',
+          'a:contains("choose file")',
+          'a:contains("Choose file")',
+          '[role="button"]:contains("choose file")',
+        ], 10000);
+
+        if (!chooseFileLink) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'CHOOSE_FILE_LINK_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: 'Choose file link not found in upload modal',
+          };
+        }
+
+        logger.info('Clicking "choose file" link to trigger file input...');
+        await chooseFileLink.click();
+        await this.randomDelay(1000, 2000);
+        
+        // Look for the file input that should appear after clicking
+        fileInput = await this.waitForSelectorWithRetry([
+          'input[type="file"]',
+          'input[accept*="pdf"]',
+          'input[accept*=".pdf"]',
+        ], 5000);
+      }
+        
+      if (!fileInput) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+          error_code: 'FILE_INPUT_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: currentUrl,
+          evidence: 'File input not found in upload modal',
+        };
+      }
+
+      // Upload the PDF file directly to the file input
+      logger.info(`Uploading resume PDF: ${resumePdfPath}`);
+      
+      // Verify the file exists before uploading
+      const fs = await import('fs');
+      if (!fs.existsSync(resumePdfPath)) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'RESUME_PDF_FILE_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: `Resume PDF file not found at path: ${resumePdfPath}`,
+        };
+      }
+      
+      const fileStats = fs.statSync(resumePdfPath);
+      logger.info({ 
+        fileSize: `${(fileStats.size / 1024).toFixed(2)} KB`,
+        filePath: resumePdfPath 
+      }, 'Resume PDF file details');
+      
+      await fileInput.uploadFile(resumePdfPath);
+      logger.info('PDF file uploaded successfully');
+
+      await this.randomDelay(3000, 5000); // Wait for file upload to process
+
+      // Verify the file was uploaded by checking for the file name in the UI
+      logger.info('Verifying file upload by checking for file name in UI...');
+      const fileNameElement = await this.waitForSelectorWithRetry([
+        'span.file-name:contains("resume_1.pdf")',
+        'span.ellipsis.file-name:contains("resume_1.pdf")',
+        'span[data-v-6d05ecdc].ellipsis.file-name:contains("resume_1.pdf")',
+        '.file-name:contains("resume_1.pdf")',
+        'span:contains("resume_1.pdf")',
+      ], 10000);
+
+      if (fileNameElement) {
+        const fileName = await fileNameElement.evaluate((el: Element) => el.textContent?.trim() || '');
+        logger.info(`File upload verified: "${fileName}" found in UI`);
+        
+        // Also check for upload success indicators (green checkmark, etc.)
+        const uploadSuccessIndicators = await this.page.$$('.air3-icon-check, .checkmark, [class*="success"], [class*="complete"]');
+        if (uploadSuccessIndicators.length > 0) {
+          logger.info(`Found ${uploadSuccessIndicators.length} upload success indicators`);
+        }
+      } else {
+        logger.warn('File name not found in UI, upload might have failed');
+        // Continue anyway as the file might still be processing
+      }
+
+      // Wait for the specific continue button after file upload
+      logger.info('Waiting for resume upload continue button...');
+      
+      // Take a screenshot to debug the current state
+      this.screenshots.resume_upload_debug = await this.takeScreenshot('resume_upload_debug');
+      
+      // Try multiple approaches to find the continue button
+      let continueButton = null;
+      
+      // Approach 1: Look for the specific button with exact selectors
+      continueButton = await this.page.$('button[data-qa="resume-upload-continue-btn"]');
+      if (continueButton) {
+        logger.info('Found continue button via data-qa selector');
+      } else {
+        continueButton = await this.page.$('button[data-ev-label="resume_upload_continue_btn"]');
+        if (continueButton) {
+          logger.info('Found continue button via data-ev-label selector');
+        }
+      }
+      
+      // Approach 2: Look for button with specific classes and text
+      if (!continueButton) {
+        const allButtons = await this.page.$$('button');
+        for (const button of allButtons) {
+          const text = await button.evaluate(el => el.textContent?.trim() || '');
+          const classes = await button.evaluate(el => el.className || '');
+          logger.info(`Found button: "${text}" with classes: "${classes}"`);
+          
+          if (text.toLowerCase().includes('continue') && classes.includes('air3-btn-primary')) {
+            continueButton = button;
+            logger.info('Found continue button via text and class search');
+            break;
+          }
+        }
+      }
+      
+      // Approach 3: Fallback to generic selectors
+      if (!continueButton) {
+        continueButton = await this.waitForSelectorWithRetry([
+          'button.air3-btn.air3-btn-primary:contains("Continue")',
+          'button:contains("Continue")',
+          'button:contains("Upload")',
+          'button:contains("Next")',
+          'button[data-qa*="continue"]',
+          'button[data-qa*="next"]',
+          '.air3-btn-primary',
+        ], 10000);
+        if (continueButton) {
+          logger.info('Found continue button via fallback selectors');
+        }
+      }
+
+      if (continueButton) {
+        // Check if button is enabled/clickable
+        const isEnabled = await continueButton.evaluate((el: Element) => {
+          const button = el as HTMLButtonElement;
+          return !button.disabled && button.offsetParent !== null;
+        });
+        
+        if (isEnabled) {
+          logger.info('Continue button is enabled, clicking to proceed...');
+          await continueButton.click();
+      await this.randomDelay(2000, 3000);
+          
+          // Wait a bit more for the upload to process
+          logger.info('Waiting for upload processing to complete...');
+          await this.randomDelay(3000, 5000);
+        } else {
+          logger.warn('Continue button found but is disabled or not visible');
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'RESUME_CONTINUE_BUTTON_DISABLED',
+            screenshots: this.screenshots,
+            url: currentUrl,
+            evidence: 'Continue button is disabled or not visible',
+          };
+        }
+      } else {
+        logger.warn('Continue button not found after file upload');
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: 'RESUME_CONTINUE_BUTTON_NOT_FOUND',
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: 'Continue button not found after resume upload',
+        };
+      }
+
       this.screenshots.resume_after = await this.takeScreenshot('resume_after');
 
       // Wait for navigation to next step
@@ -1215,31 +1449,10 @@ export class LoginAutomation {
         }
       }
 
-      // Continue with the next steps in the profile creation flow
-      const categoriesResult = await this.handleCategoriesStep();
-      if (categoriesResult.status !== 'success') {
-        return categoriesResult;
-      }
-
-      const skillsResult = await this.handleSkillsSelectionStep();
-      if (skillsResult.status !== 'success') {
-        return skillsResult;
-      }
-
-      const titleResult = await this.handleTitleStep();
-      if (titleResult.status !== 'success') {
-        return titleResult;
-      }
-
-      const employmentResult = await this.handleEmploymentStep();
-      if (employmentResult.status !== 'success') {
-        return employmentResult;
-      }
-
-      logger.info('Resume import and profile creation completed successfully');
+      logger.info('Resume upload completed successfully, proceeding to next step');
       return {
         status: 'success',
-        stage: 'employment_saved',
+        stage: 'create_profile',
         screenshots: this.screenshots,
         url: this.page.url(),
       };
@@ -1332,20 +1545,23 @@ export class LoginAutomation {
     return null; // Last step or not found
   }
 
-  private async resumeProfileCreation(): Promise<LoginResult> {
+  private async resumeProfileCreation(options?: { uploadOnly?: boolean }): Promise<LoginResult> {
     try {
       // Get current URL after potential navigation
       const currentUrl = this.page.url();
       const currentStep = this.detectProfileStep(currentUrl);
       
-      logger.info({ currentUrl, currentStep }, 'Resuming profile creation from step');
+      logger.info({ currentUrl, currentStep, uploadOnly: options?.uploadOnly }, 'Resuming profile creation from step');
 
       // Handle steps sequentially starting from current step
       let currentStepIndex = this.getStepIndex(currentStep);
       const steps = ['experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'location'];
       
+      // Run all steps (upload mode now continues to the end)
+      const maxSteps = steps.length;
+      
       // Execute remaining steps in order
-      for (let i = currentStepIndex; i < steps.length; i++) {
+      for (let i = currentStepIndex; i < maxSteps; i++) {
         const stepName = steps[i];
         let stepResult: LoginResult;
         
@@ -1359,28 +1575,28 @@ export class LoginAutomation {
           case 'work_preference':
             stepResult = await this.handleWorkPreferenceStep();
             break;
-          case 'resume_import':
+        case 'resume_import':
             stepResult = await this.handleResumeImportStep();
             break;
-          case 'education':
+        case 'education':
             stepResult = await this.handleEducationStep();
             break;
-          case 'languages':
+        case 'languages':
             stepResult = await this.handleLanguagesStep();
             break;
-          case 'skills':
+        case 'skills':
             stepResult = await this.handleSkillsStep();
             break;
-          case 'overview':
+        case 'overview':
             stepResult = await this.handleOverviewStep();
             break;
-          case 'rate':
+        case 'rate':
             stepResult = await this.handleRateStep();
             break;
-          case 'location':
+        case 'location':
             stepResult = await this.handleLocationStep();
             break;
-          case 'general':
+        case 'general':
             stepResult = await this.handleGeneralStep();
             break;
           case 'categories':
@@ -1395,7 +1611,7 @@ export class LoginAutomation {
           case 'employment':
             stepResult = await this.handleEmploymentStep();
             break;
-          default:
+        default:
             logger.warn(`Unknown step: ${stepName}`);
             continue;
         }
@@ -1455,7 +1671,114 @@ export class LoginAutomation {
       await this.waitForPageReady();
       this.screenshots.education_before = await this.takeScreenshot('education_before');
 
-      // First, look for "Add education" button
+      // First, try to find and click Next button (education might be auto-filled from resume upload)
+      const educationNextButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="next-btn"]',
+        'button[data-ev-label="next_btn"]',
+        'button.air3-btn-primary:contains("Next")',
+        'button:contains("Next")',
+        '[role="button"]:contains("Next")',
+        'a[role="button"]:contains("Next")',
+        'button[type="submit"]:contains("Next")',
+        'button.air3-btn:contains("Next")',
+        'button[class*="btn"]:contains("Next")',
+        'button:contains("Continue")',
+        'button:contains("Skip")',
+        '[role="button"][aria-label*="Next"]',
+        '[role="button"][aria-label*="Skip"]',
+        '[data-test="next-button"]',
+      ], 10000);
+
+      if (educationNextButton) {
+        logger.info('Found Next button (education likely auto-filled), clicking it...');
+        await educationNextButton.click();
+        await this.randomDelay(2000, 4000);
+        
+        // Wait for navigation
+        try {
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (error) {
+          // Check if we're already on the next page
+          const newUrl = this.page.url();
+          if (!newUrl.includes('/nx/create-profile/')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'EDUCATION_NAVIGATION_FAILED',
+              screenshots: this.screenshots,
+              url: newUrl,
+              evidence: 'Failed to navigate from education page',
+            };
+          }
+        }
+        
+        this.screenshots.education_after = await this.takeScreenshot('education_after');
+        
+        logger.info('Education step completed successfully with Next button');
+        return {
+          status: 'success',
+          stage: 'create_profile',
+          screenshots: this.screenshots,
+          url: this.page.url(),
+        };
+      }
+
+      // If no Next button found, check if there's an existing education entry to edit
+      logger.info('No Next button found, checking for existing education entries...');
+      const editButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="edit-item"]',
+        'button[data-ev-label="edit_item"]',
+        'button[aria-label="Edit"]',
+        '.air3-btn-circle[aria-label="Edit"]',
+        'button:contains("Edit")',
+      ], 10000);
+
+      if (editButton) {
+        logger.info('Found Edit button, education entry exists but may need adjustment...');
+        // For now, just try to continue since education is typically auto-filled
+        // We could add edit logic here later if needed
+        const educationNextButtonAfterEdit = await this.waitForSelectorWithRetry([
+          'button[data-qa="next-btn"]',
+          'button[data-ev-label="next_btn"]',
+          'button.air3-btn-primary:contains("Next")',
+          'button:contains("Next")',
+          '[role="button"]:contains("Next")',
+        ], 5000);
+
+        if (educationNextButtonAfterEdit) {
+          logger.info('Found Next button after checking for edit, clicking it...');
+          await educationNextButtonAfterEdit.click();
+          await this.randomDelay(2000, 4000);
+          
+          try {
+            await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+          } catch (error) {
+            const newUrl = this.page.url();
+            if (!newUrl.includes('/nx/create-profile/')) {
+              return {
+                status: 'soft_fail',
+                stage: 'create_profile',
+                error_code: 'EDUCATION_NAVIGATION_FAILED',
+                screenshots: this.screenshots,
+                url: newUrl,
+                evidence: 'Failed to navigate from education page after edit check',
+              };
+            }
+          }
+          
+          this.screenshots.education_after = await this.takeScreenshot('education_after');
+          
+          logger.info('Education step completed successfully after edit check');
+          return {
+            status: 'success',
+            stage: 'create_profile',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+          };
+        }
+      }
+
+      // If no edit button found, look for "Add education" button to add new education
       const addEducationButton = await this.waitForSelectorWithRetry([
         'button[data-qa="education-add-btn"]',
         'button[data-ev-label="education_add_btn"]',
@@ -1812,6 +2135,98 @@ export class LoginAutomation {
     }
   }
 
+  private async handleStepWithNextButtonFallback(
+    stepName: string, 
+    errorCode: string, 
+    formFillingFunction: () => Promise<LoginResult>
+  ): Promise<LoginResult> {
+    try {
+      logger.info(`Handling ${stepName} step with next button fallback...`);
+
+      // Assert current route
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes(`/nx/create-profile/${stepName}`)) {
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
+          error_code: errorCode,
+          screenshots: this.screenshots,
+          url: currentUrl,
+          evidence: `Expected ${stepName} page, got ${currentUrl}`,
+        };
+      }
+
+      await this.waitForPageReady();
+      (this.screenshots as any)[`${stepName}_before`] = await this.takeScreenshot(`${stepName}_before`);
+
+      // Try to find and click Next button first
+      const nextButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="next-btn"]',
+        'button[data-ev-label="next_btn"]',
+        'button.air3-btn-primary:contains("Next")',
+        'button:contains("Next")',
+        '[role="button"]:contains("Next")',
+        'a[role="button"]:contains("Next")',
+        'button[type="submit"]:contains("Next")',
+        'button.air3-btn:contains("Next")',
+        'button[class*="btn"]:contains("Next")',
+        'button:contains("Continue")',
+        'button:contains("Skip")',
+        '[role="button"][aria-label*="Next"]',
+        '[role="button"][aria-label*="Skip"]',
+        '[data-test="next-button"]',
+      ], 10000);
+
+      if (nextButton) {
+        logger.info(`Found Next button on ${stepName} page, clicking it...`);
+        await nextButton.click();
+        await this.randomDelay(2000, 4000);
+        
+        // Wait for navigation
+        try {
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (error) {
+          // Check if we're already on the next page
+          const newUrl = this.page.url();
+          if (!newUrl.includes('/nx/create-profile/')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: `${stepName.toUpperCase()}_NAVIGATION_FAILED`,
+              screenshots: this.screenshots,
+              url: newUrl,
+              evidence: `Failed to navigate from ${stepName} page`,
+            };
+          }
+        }
+        
+        (this.screenshots as any)[`${stepName}_after`] = await this.takeScreenshot(`${stepName}_after`);
+        
+        logger.info(`${stepName} step completed successfully with Next button`);
+        return {
+          status: 'success',
+          stage: 'create_profile',
+          screenshots: this.screenshots,
+          url: this.page.url(),
+        };
+      }
+
+      // If no Next button found, proceed with form filling
+      logger.info(`No Next button found on ${stepName} page, proceeding with form filling...`);
+      return await formFillingFunction();
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: `${stepName.toUpperCase()}_STEP_FAILED`,
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : `${stepName} step failed`,
+      };
+    }
+  }
+
   private async handleSkillsStep(): Promise<LoginResult> {
     try {
       logger.info('Handling skills step...');
@@ -1832,15 +2247,154 @@ export class LoginAutomation {
       await this.waitForPageReady();
       this.screenshots.skills_before = await this.takeScreenshot('skills_before');
 
-      // Look for "Skip" or "Next" button to continue
+      // Check if there's an error message indicating skills are required
+      const errorMessage = await this.page.$('text="At least one skill is required."');
+      const hasError = errorMessage !== null;
+
+      // If there's an error or no skills are selected, we need to fill the form
+      if (hasError) {
+        logger.info('Skills error detected, filling skills form...');
+        return await this.fillSkillsForm();
+      }
+
+      // Check if any skills are already selected
+      const selectedSkills = await this.page.$$('.air3-token.air3-token-selected, .air3-token[aria-selected="true"]');
+      if (selectedSkills.length === 0) {
+        logger.info('No skills selected, filling skills form...');
+        return await this.fillSkillsForm();
+      }
+
+      // If skills are already selected, try to find and click Next button
+      logger.info(`${selectedSkills.length} skills already selected, looking for Next button...`);
       const nextButton = await this.waitForSelectorWithRetry([
-        '[role="button"][aria-label*="Skip"]',
-        '[role="button"][aria-label*="Next"]',
-        '[data-test="next-button"]',
-        'button:contains("Skip")',
+        'button[data-qa="next-btn"]',
+        'button[data-ev-label="next_btn"]',
+        'button.air3-btn-primary:contains("Next")',
         'button:contains("Next")',
+        '[role="button"]:contains("Next")',
+        'a[role="button"]:contains("Next")',
+        'button[type="submit"]:contains("Next")',
+        'button.air3-btn:contains("Next")',
+        'button[class*="btn"]:contains("Next")',
         'button:contains("Continue")',
-      ], 15000);
+        'button:contains("Skip")',
+        '[role="button"][aria-label*="Next"]',
+        '[role="button"][aria-label*="Skip"]',
+        '[data-test="next-button"]',
+      ], 10000);
+
+      if (nextButton) {
+        logger.info('Found Next button, clicking it...');
+        await nextButton.click();
+        await this.randomDelay(2000, 4000);
+        
+        // Wait for navigation
+        try {
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (error) {
+          // Check if we're already on the next page
+          const newUrl = this.page.url();
+          if (!newUrl.includes('/nx/create-profile/')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'SKILLS_NAVIGATION_FAILED',
+              screenshots: this.screenshots,
+              url: newUrl,
+              evidence: 'Failed to navigate from skills page',
+            };
+          }
+        }
+        
+        this.screenshots.skills_after = await this.takeScreenshot('skills_after');
+        
+        logger.info('Skills step completed successfully with Next button');
+        return {
+          status: 'success',
+          stage: 'create_profile',
+          screenshots: this.screenshots,
+          url: this.page.url(),
+        };
+      }
+
+      // If no Next button found, fill the form
+      logger.info('No Next button found, filling skills form...');
+      return await this.fillSkillsForm();
+
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'SKILLS_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Skills step failed',
+      };
+    }
+  }
+
+  private async fillSkillsForm(): Promise<LoginResult> {
+    try {
+      logger.info('Filling skills form...');
+
+      // First, try to click on suggested skills
+      const suggestedSkills = [
+        'Coaching',
+        'Business Coaching', 
+        'Career Coaching',
+        'Continuing Professional Development',
+        'Professional Tone',
+        'Life Coaching'
+      ];
+
+      // Click on the first few suggested skills
+      for (let i = 0; i < Math.min(3, suggestedSkills.length); i++) {
+        const skillName = suggestedSkills[i];
+        logger.info(`Clicking suggested skill: ${skillName}`);
+        
+        const skillButton = await this.waitForSelectorWithRetry([
+          `[role="button"][aria-label="${skillName}"]`,
+          `.air3-token:contains("${skillName}")`,
+          `div[aria-label="${skillName}"]`,
+        ], 5000);
+
+        if (skillButton) {
+          await skillButton.click();
+          await this.randomDelay(500, 1000);
+          logger.info(`Successfully clicked skill: ${skillName}`);
+        } else {
+          logger.warn(`Could not find skill button for: ${skillName}`);
+        }
+      }
+
+      // Wait a moment for the skills to be processed
+      await this.randomDelay(1000, 2000);
+
+      // Check if the error message is gone
+      const errorMessage = await this.page.$('text="At least one skill is required."');
+      if (errorMessage) {
+        logger.warn('Error message still present after selecting skills');
+      } else {
+        logger.info('Error message cleared, skills selected successfully');
+      }
+
+      // Now try to find and click Next button
+      const nextButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="next-btn"]',
+        'button[data-ev-label="next_btn"]',
+        'button.air3-btn-primary:contains("Next")',
+        'button:contains("Next")',
+        '[role="button"]:contains("Next")',
+        'a[role="button"]:contains("Next")',
+        'button[type="submit"]:contains("Next")',
+        'button.air3-btn:contains("Next")',
+        'button[class*="btn"]:contains("Next")',
+        'button:contains("Continue")',
+        'button:contains("Skip")',
+        '[role="button"][aria-label*="Next"]',
+        '[role="button"][aria-label*="Skip"]',
+        '[data-test="next-button"]',
+      ], 10000);
 
       if (!nextButton) {
         return {
@@ -1848,8 +2402,8 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'SKILLS_NEXT_NOT_FOUND',
           screenshots: this.screenshots,
-          url: currentUrl,
-          evidence: 'Next/Skip button not found on skills page',
+          url: this.page.url(),
+          evidence: 'Next button not found after filling skills',
         };
       }
 
@@ -1875,7 +2429,7 @@ export class LoginAutomation {
         }
       }
 
-      logger.info('Skills step completed successfully');
+      logger.info('Skills form filled and navigation completed successfully');
       return {
         status: 'success',
         stage: 'create_profile',
@@ -1887,10 +2441,10 @@ export class LoginAutomation {
       return {
         status: 'soft_fail',
         stage: 'create_profile',
-        error_code: 'SKILLS_STEP_FAILED',
+        error_code: 'SKILLS_FORM_FILL_FAILED',
         screenshots: this.screenshots,
         url: this.page.url(),
-        evidence: error instanceof Error ? error.message : 'Skills step failed',
+        evidence: error instanceof Error ? error.message : 'Failed to fill skills form',
       };
     }
   }
@@ -1915,6 +2469,61 @@ export class LoginAutomation {
       await this.waitForPageReady();
       this.screenshots.overview_before = await this.takeScreenshot('overview_before');
 
+      // For --upload flag, overview should already be filled, so just try to click Next button
+      const overviewNextButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="next-btn"]',
+        'button[data-ev-label="next_btn"]',
+        'button.air3-btn-primary:contains("Next")',
+        'button:contains("Next")',
+        '[role="button"]:contains("Next")',
+        'a[role="button"]:contains("Next")',
+        'button[type="submit"]:contains("Next")',
+        'button.air3-btn:contains("Next")',
+        'button[class*="btn"]:contains("Next")',
+        'button:contains("Continue")',
+        'button:contains("Skip")',
+        '[role="button"][aria-label*="Next"]',
+        '[role="button"][aria-label*="Skip"]',
+        '[data-test="next-button"]',
+      ], 10000);
+
+      if (overviewNextButton) {
+        logger.info('Found Next button on overview page (likely auto-filled from resume), clicking it...');
+        await overviewNextButton.click();
+        await this.randomDelay(2000, 4000);
+        
+        // Wait for navigation
+        try {
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (error) {
+          // Check if we're already on the next page
+          const newUrl = this.page.url();
+          if (!newUrl.includes('/nx/create-profile/')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'OVERVIEW_NAVIGATION_FAILED',
+              screenshots: this.screenshots,
+              url: newUrl,
+              evidence: 'Failed to navigate from overview page',
+            };
+          }
+        }
+        
+        this.screenshots.overview_after = await this.takeScreenshot('overview_after');
+        
+        logger.info('Overview step completed successfully with Next button');
+        return {
+          status: 'success',
+          stage: 'create_profile',
+          screenshots: this.screenshots,
+          url: this.page.url(),
+        };
+      }
+
+      // If no Next button found, fallback to filling the overview form
+      logger.info('No Next button found, falling back to filling overview form...');
+      
       // Find the overview textarea
       const overviewTextarea = await this.waitForSelectorWithRetry([
         'textarea[aria-labelledby="overview-label"]',
@@ -2497,8 +3106,8 @@ export class LoginAutomation {
 
       if (!isActive) {
         logger.info('Clicking IT & Networking category...');
-        await leftMenuItem.click();
-        await this.randomDelay(1000, 2000);
+      await leftMenuItem.click();
+      await this.randomDelay(1000, 2000);
       } else {
         logger.info('IT & Networking category already active, skipping click...');
       }
@@ -2784,28 +3393,9 @@ export class LoginAutomation {
   }
 
   private async handleTitleStep(): Promise<LoginResult> {
-    try {
-      logger.info('Handling title step...');
-
-      // Assert current route
-      const currentUrl = this.page.url();
-      if (!currentUrl.includes('/nx/create-profile/title')) {
-        // Check for landmark element as fallback
-        const titleInput = await this.page.$('input[aria-labelledby="title-label"]');
-        if (!titleInput) {
-          return {
-            status: 'soft_fail',
-            stage: 'create_profile',
-            error_code: 'TITLE_PAGE_NOT_FOUND',
-            screenshots: this.screenshots,
-            url: currentUrl,
-            evidence: `Expected title page, got ${currentUrl}`,
-          };
-        }
-      }
-
-      await this.waitForPageReady();
-      this.screenshots.title_before = await this.takeScreenshot('title_before');
+    return this.handleStepWithNextButtonFallback('title', 'TITLE_PAGE_NOT_FOUND', async () => {
+      // Title form filling logic
+      logger.info('Filling title form...');
 
       // Step 1: Type profile title
       const titleInput = await this.waitForSelectorWithRetry([
@@ -2821,7 +3411,7 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'TITLE_INPUT_NOT_FOUND',
           screenshots: this.screenshots,
-          url: currentUrl,
+          url: this.page.url(),
           evidence: 'Title input field not found',
         };
       }
@@ -2854,12 +3444,11 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'TITLE_NEXT_NOT_FOUND',
           screenshots: this.screenshots,
-          url: currentUrl,
+          url: this.page.url(),
           evidence: 'Next button not found on title page',
         };
       }
 
-      this.screenshots.title_after = await this.takeScreenshot('title_after');
       await nextButton.click();
       await this.randomDelay(2000, 3000);
 
@@ -2888,17 +3477,7 @@ export class LoginAutomation {
         screenshots: this.screenshots,
         url: this.page.url(),
       };
-
-    } catch (error) {
-      return {
-        status: 'soft_fail',
-        stage: 'create_profile',
-        error_code: 'TITLE_STEP_FAILED',
-        screenshots: this.screenshots,
-        url: this.page.url(),
-        evidence: error instanceof Error ? error.message : 'Title step failed',
-      };
-    }
+    });
   }
 
   private async handleEmploymentStep(): Promise<LoginResult> {
@@ -2937,6 +3516,236 @@ export class LoginAutomation {
       await this.waitForPageReady();
       this.screenshots.employment_before = await this.takeScreenshot('employment_before');
 
+      // First, try to find and click Next button
+      const nextButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="next-btn"]',
+        'button[data-ev-label="next_btn"]',
+        'button.air3-btn-primary:contains("Next")',
+        'button:contains("Next")',
+        '[role="button"]:contains("Next")',
+        'a[role="button"]:contains("Next")',
+        'button[type="submit"]:contains("Next")',
+        'button.air3-btn:contains("Next")',
+        'button[class*="btn"]:contains("Next")',
+        'button:contains("Continue")',
+        'button:contains("Skip")',
+        '[role="button"][aria-label*="Next"]',
+        '[role="button"][aria-label*="Skip"]',
+        '[data-test="next-button"]',
+      ], 10000);
+
+      if (nextButton) {
+        logger.info('Found Next button, clicking it...');
+        await nextButton.click();
+        await this.randomDelay(2000, 4000);
+        
+        // Wait for navigation
+        try {
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (error) {
+          // Check if we're already on the next page
+          const newUrl = this.page.url();
+          if (!newUrl.includes('/nx/create-profile/')) {
+            return {
+              status: 'soft_fail',
+              stage: 'create_profile',
+              error_code: 'EMPLOYMENT_NAVIGATION_FAILED',
+              screenshots: this.screenshots,
+              url: newUrl,
+              evidence: 'Failed to navigate from employment page',
+            };
+          }
+        }
+        
+        (this.screenshots as any).employment_after = await this.takeScreenshot('employment_after');
+        
+        logger.info('Employment step completed successfully with Next button');
+        return {
+          status: 'success',
+          stage: 'create_profile',
+          screenshots: this.screenshots,
+          url: this.page.url(),
+        };
+      }
+
+      // If no Next button found, check if there's an existing employment entry to edit
+      logger.info('No Next button found, checking for existing employment entries...');
+      const editButton = await this.waitForSelectorWithRetry([
+        'button[data-qa="edit-item"]',
+        'button[data-ev-label="edit_item"]',
+        'button[aria-label="Edit"]',
+        '.air3-btn-circle[aria-label="Edit"]',
+        'button:contains("Edit")',
+      ], 10000);
+
+      if (editButton) {
+        logger.info('Found Edit button, clicking it to edit existing employment...');
+        await editButton.click();
+        await this.randomDelay(2000, 3000);
+        
+        // Wait for edit modal to appear
+        const editModal = await this.waitForSelectorWithRetry([
+          '[role="dialog"]',
+          '.modal',
+          '[data-test="modal"]',
+        ], 10000);
+
+        if (!editModal) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'EMPLOYMENT_EDIT_MODAL_NOT_VISIBLE',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: 'Employment edit modal did not appear',
+          };
+        }
+
+        (this.screenshots as any).employment_edit_modal = await this.takeScreenshot('employment_edit_modal');
+
+        // In the edit modal, check the "I am currently working in this role" checkbox
+        const currentlyWorkingCheckbox = await this.waitForSelectorWithRetry([
+          'input[type="checkbox"][aria-labelledby*="currently"]',
+          'input[type="checkbox"]:has(+ label:contains("currently working"))',
+          'input[type="checkbox"]:has(+ span:contains("currently working"))',
+          'label:contains("I am currently working in this role") input[type="checkbox"]',
+          'input[type="checkbox"]',
+        ], 10000);
+
+        if (currentlyWorkingCheckbox) {
+          logger.info('Found currently working checkbox, checking it...');
+          const isChecked = await currentlyWorkingCheckbox.evaluate((el: Element) => (el as HTMLInputElement).checked);
+          
+          if (!isChecked) {
+            await currentlyWorkingCheckbox.click();
+            await this.randomDelay(500, 1000);
+            logger.info('Checked "I am currently working in this role" checkbox');
+          } else {
+            logger.info('Currently working checkbox is already checked');
+          }
+        } else {
+          logger.warn('Currently working checkbox not found');
+        }
+
+        // Click Save button to close the modal
+        const saveButton = await this.waitForSelectorWithRetry([
+          'button[data-qa="btn-save"]',
+          'button[data-ev-label="btn_save"]',
+          'button.air3-btn.air3-btn-primary:contains("Save")',
+          'button:contains("Save")',
+          '[role="button"]:contains("Save")',
+        ], 10000);
+
+        if (!saveButton) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'EMPLOYMENT_SAVE_BUTTON_NOT_FOUND',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: 'Save button not found in edit modal',
+          };
+        }
+
+        logger.info('Clicking Save button to close edit modal...');
+        await saveButton.click();
+        await this.randomDelay(2000, 3000);
+
+        // Verify the modal closed
+        const modalStillOpen = await this.page.$('[role="dialog"]');
+        if (modalStillOpen) {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'EMPLOYMENT_EDIT_MODAL_NOT_CLOSED',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: 'Edit modal did not close after saving',
+          };
+        }
+
+        // Now try to find and click Next button again
+        logger.info('Edit modal closed, looking for Next button...');
+        const nextButtonAfterEdit = await this.waitForSelectorWithRetry([
+          'button[data-qa="next-btn"]',
+          'button[data-ev-label="next_btn"]',
+          'button.air3-btn-primary:contains("Next")',
+          'button:contains("Next")',
+          '[role="button"]:contains("Next")',
+          'a[role="button"]:contains("Next")',
+          'button[type="submit"]:contains("Next")',
+          'button.air3-btn:contains("Next")',
+          'button[class*="btn"]:contains("Next")',
+          'button:contains("Continue")',
+          'button:contains("Skip")',
+          '[role="button"][aria-label*="Next"]',
+          '[role="button"][aria-label*="Skip"]',
+          '[data-test="next-button"]',
+        ], 10000);
+
+        if (nextButtonAfterEdit) {
+          logger.info('Found Next button after edit, clicking it...');
+          await nextButtonAfterEdit.click();
+          await this.randomDelay(2000, 4000);
+          
+          // Wait for navigation
+          try {
+            await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+          } catch (error) {
+            // Check if we're already on the next page
+            const newUrl = this.page.url();
+            if (!newUrl.includes('/nx/create-profile/')) {
+              return {
+                status: 'soft_fail',
+                stage: 'create_profile',
+                error_code: 'EMPLOYMENT_NAVIGATION_FAILED',
+                screenshots: this.screenshots,
+                url: newUrl,
+                evidence: 'Failed to navigate from employment page after edit',
+              };
+            }
+          }
+          
+          (this.screenshots as any).employment_after = await this.takeScreenshot('employment_after');
+          
+          logger.info('Employment step completed successfully after editing');
+          return {
+            status: 'success',
+            stage: 'create_profile',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+          };
+        } else {
+          return {
+            status: 'soft_fail',
+            stage: 'create_profile',
+            error_code: 'EMPLOYMENT_NEXT_NOT_FOUND_AFTER_EDIT',
+            screenshots: this.screenshots,
+            url: this.page.url(),
+            evidence: 'Next button not found after editing employment',
+          };
+        }
+      }
+
+      // If no edit button found, proceed with adding new employment
+      logger.info('No edit button found, proceeding with adding new employment...');
+      return await this.addNewEmployment();
+    } catch (error) {
+      return {
+        status: 'soft_fail',
+        stage: 'create_profile',
+        error_code: 'EMPLOYMENT_STEP_FAILED',
+        screenshots: this.screenshots,
+        url: this.page.url(),
+        evidence: error instanceof Error ? error.message : 'Employment step failed',
+      };
+    }
+  }
+
+  private async addNewEmployment(): Promise<LoginResult> {
+    try {
+      logger.info('Adding new employment entry...');
+
       // Step 1: Open "Add experience" modal
       const addButton = await this.waitForSelectorWithRetry([
         'button[data-qa="employment-add-btn"]',
@@ -2954,7 +3763,7 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'EMPLOYMENT_ADD_BUTTON_NOT_FOUND',
           screenshots: this.screenshots,
-          url: currentUrl,
+          url: this.page.url(),
           evidence: 'Add experience button not found',
         };
       }
@@ -2975,7 +3784,7 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'EMPLOYMENT_MODAL_NOT_VISIBLE',
           screenshots: this.screenshots,
-          url: currentUrl,
+          url: this.page.url(),
           evidence: 'Employment modal did not appear',
         };
       }
@@ -3006,7 +3815,7 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'MODAL_TITLE_INPUT_NOT_FOUND',
           screenshots: this.screenshots,
-          url: currentUrl,
+          url: this.page.url(),
           evidence: 'Title input not found in modal',
         };
       }
@@ -3032,7 +3841,7 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'MODAL_COMPANY_INPUT_NOT_FOUND',
           screenshots: this.screenshots,
-          url: currentUrl,
+          url: this.page.url(),
           evidence: 'Company input not found in modal',
         };
       }
@@ -3204,12 +4013,12 @@ export class LoginAutomation {
           
           if (!dropdownMenu) {
             logger.warn('Country dropdown menu did not open after clicking');
-            return {
-              status: 'soft_fail',
-              stage: 'create_profile',
+        return {
+          status: 'soft_fail',
+          stage: 'create_profile',
               error_code: 'COUNTRY_DROPDOWN_NOT_OPEN',
-              screenshots: this.screenshots,
-              url: currentUrl,
+          screenshots: this.screenshots,
+              url: this.page.url(),
               evidence: 'Country dropdown menu did not open',
             };
           }
@@ -3229,7 +4038,7 @@ export class LoginAutomation {
         if (searchInput) {
           logger.info('Found search input in country dropdown, clicking and typing country name...');
           await searchInput.click();
-          await this.randomDelay(500, 1000);
+      await this.randomDelay(500, 1000);
           await searchInput.evaluate((el: Element) => (el as HTMLInputElement).value = ''); // Clear field
           await this.typeHumanLike(expectedCountry);
           await this.randomDelay(1000, 2000);
@@ -3240,7 +4049,7 @@ export class LoginAutomation {
           
           // Press Enter to confirm selection
           await this.page.keyboard.press('Enter');
-          await this.randomDelay(500, 1000);
+        await this.randomDelay(500, 1000);
           
           logger.info(`Successfully selected country: ${expectedCountry}`);
         } else {
@@ -3331,46 +4140,46 @@ export class LoginAutomation {
       if (!isCurrentlyWorking) {
         logger.info('Not currently working, filling end date...');
         
-        const endMonthDropdown = await this.waitForSelectorWithRetry([
+      const endMonthDropdown = await this.waitForSelectorWithRetry([
           'div[data-test="dropdown-toggle"][aria-labelledby="end-date-month"]',
           'div[role="combobox"][aria-labelledby="end-date-month"]',
-        ], 5000);
+      ], 5000);
 
-        if (endMonthDropdown) {
-          await endMonthDropdown.click();
-          await this.randomDelay(500, 1000);
+      if (endMonthDropdown) {
+        await endMonthDropdown.click();
+        await this.randomDelay(500, 1000);
           
-          // Select December
+        // Select December
           const decemberOption = await this.waitForSelectorWithRetry([
             '[role="option"]:contains("December")',
             'li:contains("December")',
           ], 5000);
           
-          if (decemberOption) {
-            await decemberOption.click();
+        if (decemberOption) {
+          await decemberOption.click();
             await this.randomDelay(500, 1000);
-          }
         }
+      }
 
-        const endYearDropdown = await this.waitForSelectorWithRetry([
+      const endYearDropdown = await this.waitForSelectorWithRetry([
           'div[data-test="dropdown-toggle"][aria-labelledby="end-date-year"]',
           'div[role="combobox"][aria-labelledby="end-date-year"]',
-        ], 5000);
+      ], 5000);
 
-        if (endYearDropdown) {
-          await endYearDropdown.click();
-          await this.randomDelay(500, 1000);
+      if (endYearDropdown) {
+        await endYearDropdown.click();
+        await this.randomDelay(500, 1000);
           
-          // Select 2023
+        // Select 2023
           const year2023Option = await this.waitForSelectorWithRetry([
             `[role="option"]:contains("${employmentData.work_end_year}")`,
             `li:contains("${employmentData.work_end_year}")`,
           ], 5000);
           
-          if (year2023Option) {
-            await year2023Option.click();
+        if (year2023Option) {
+          await year2023Option.click();
             await this.randomDelay(500, 1000);
-          }
+        }
         }
       } else {
         logger.info('Currently working, skipping end date fields...');
@@ -3390,7 +4199,7 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'MODAL_DESCRIPTION_NOT_FOUND',
           screenshots: this.screenshots,
-          url: currentUrl,
+          url: this.page.url(),
           evidence: 'Description textarea not found in modal',
         };
       }
@@ -3419,7 +4228,7 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'MODAL_SAVE_NOT_FOUND',
           screenshots: this.screenshots,
-          url: currentUrl,
+          url: this.page.url(),
           evidence: 'Save button not found in modal',
         };
       }
@@ -3437,7 +4246,7 @@ export class LoginAutomation {
           stage: 'create_profile',
           error_code: 'EMPLOYMENT_ENTRY_NOT_CONFIRMED',
           screenshots: this.screenshots,
-          url: currentUrl,
+          url: this.page.url(),
           evidence: 'Modal did not close after saving',
         };
       }
@@ -3449,15 +4258,14 @@ export class LoginAutomation {
         screenshots: this.screenshots,
         url: this.page.url(),
       };
-
     } catch (error) {
       return {
         status: 'soft_fail',
         stage: 'create_profile',
-        error_code: 'EMPLOYMENT_STEP_FAILED',
+        error_code: 'ADD_EMPLOYMENT_FAILED',
         screenshots: this.screenshots,
         url: this.page.url(),
-        evidence: error instanceof Error ? error.message : 'Employment step failed',
+        evidence: error instanceof Error ? error.message : 'Failed to add new employment',
       };
     }
   }

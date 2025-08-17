@@ -1,7 +1,7 @@
 import { BrowserManager } from '../browser/browserManager.js';
 import { UserService } from './userService.js';
 import { getLogger } from '../utils/logger.js';
-import { LoginAutomation, type LoginResult } from './loginAutomation.js';
+import { LoginAutomation, type LoginResult } from '../automation/LoginAutomation.js';
 import type { User } from '../types/database.js';
 import type { Page } from 'puppeteer';
 
@@ -229,7 +229,7 @@ export class UpworkService {
     }
   }
 
-  async processUser(user: User): Promise<{
+  async processUser(user: User, options?: { uploadOnly?: boolean }): Promise<{
     success: boolean;
     errorCode?: string;
     errorMessage?: string;
@@ -264,7 +264,7 @@ export class UpworkService {
       }
       
       const loginAutomation = new LoginAutomation(page, user);
-      const loginResult = await loginAutomation.execute();
+      const loginResult = await loginAutomation.execute(options);
 
       // Log the result
       logger.info({ 
@@ -292,6 +292,11 @@ export class UpworkService {
             captcha_flagged_at: new Date(),
           });
           logger.info({ userId: user.id }, 'User flagged for captcha due to suspicious login');
+        }
+        
+        // Handle phone verification pending - this is a retryable condition
+        if (loginResult.error_code === 'PHONE_VERIFICATION_PENDING') {
+          logger.info({ userId: user.id }, 'Phone verification pending, user will be retried later');
         }
         
         // Soft failures - update with error info but don't mark as permanent failure
@@ -347,7 +352,7 @@ export class UpworkService {
     }
   }
 
-  async processPendingUsers(limit: number = 5): Promise<void> {
+  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean }): Promise<void> {
     try {
       const users = await this.userService.getPendingUsers(limit);
       
@@ -377,7 +382,7 @@ export class UpworkService {
       }
 
       for (const user of users) {
-        const result = await this.processUser(user);
+        const result = await this.processUser(user, options);
         
         if (!result.success) {
           // Update user with error information

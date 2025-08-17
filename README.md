@@ -171,6 +171,36 @@ npm start visit-login -- --debug --headless --keep-open
   - `debug-unknown-page-*.png`: When on unexpected page
 - **No Automation**: Use `process-users` command for actual login automation
 
+### Test Resume Generation
+Test the PDF resume generation functionality without browser automation:
+
+```bash
+# Generate resume for first available user
+npm start test-resume
+
+# Generate resume for specific user ID
+npm start test-resume -- --user-id 1
+
+# Generate resume for specific user email
+npm start test-resume -- --email user@example.com
+
+# Generate both PDF and plain text versions
+npm start test-resume -- --plain-text
+
+# Custom output directory
+npm start test-resume -- --output ./my-resumes
+
+# Complete example with all options
+npm start test-resume -- --user-id 1 --plain-text --output ./test-output
+```
+
+**Features:**
+- Generates ATS-friendly PDF resume using user data from database
+- Optional plain text version for copy/paste scenarios
+- File size validation (warns if too small/large for ATS)
+- Customizable output directory
+- Works with user ID, email, or first available user
+
 ### Process Users with Full Login Automation
 Run the complete login automation for pending users:
 
@@ -183,6 +213,12 @@ npm start process-users -- --limit 1
 
 # Run in headless mode
 npm start process-users -- --headless
+
+# Test resume upload only (Steps 1-4: Login → Resume Import)
+npm start process-users -- --upload
+
+# Test resume upload in headless mode
+npm start process-users -- --upload --headless
 ```
 
 The automation includes:
@@ -252,14 +288,11 @@ The automation follows a step-by-step process that mimics human behavior while h
 ### Step 6: Complete Profile Creation Workflow
 **What happens:** The system completes the comprehensive profile creation process through multiple steps
 
-#### 6.1: Initial Profile Setup
+#### 6.1: Pre-onboarding
 - Takes a screenshot of the create profile page
 - Looks for the "Get Started" button
 - Clicks the button to proceed to the first step
 - Waits for navigation to complete
-
-#### 6.2: Profile Creation Steps Sequence
-The automation follows this exact sequence through Upwork's profile creation flow:
 
 **Step 1: Experience Selection**
 - URL: `/nx/create-profile/experience`
@@ -277,28 +310,45 @@ The automation follows this exact sequence through Upwork's profile creation flo
 - Action: Select preferred work arrangements
 - Button: Click "Next" to proceed
 
-**Step 4: Resume Import**
-- URL: `/nx/create-profile/resume-import`
-- Action: Choose "Fill out manually" option
-- Button: Click to proceed to next step
+#### 6.2: Profile Creation Onboarding
+The automation follows this exact sequence through Upwork's profile creation flow.
+Note that when using `--upload` flag, some might be auto-filled and can just press the Next button to submit:
 
-**Step 5: Categories Selection**
+**Step 1: Resume Import**
+- URL: `/nx/create-profile/resume-import`
+- Action: Upload ATS-friendly PDF resume (automatically generated)
+- Process:
+  1. Generate PDF resume using user data
+  2. Click "Upload your resume" button
+  3. Upload modal appears
+  4. Click "choose file" link
+  5. Upload generated PDF file
+  6. Wait for file processing (green checkmark appears)
+  7. Click "Continue" button (`data-qa="resume-upload-continue-btn"`)
+  8. Wait for upload completion and navigation
+- Features:
+  - Auto-generates ATS-compliant PDF with user information
+  - Includes professional title, skills, work experience, education
+  - Uses clean formatting (Arial font, bullet points, clear sections)
+  - PDF stored in `assets/resumes/` directory
+
+**Step 2: Categories Selection**
 - URL: `/nx/create-profile/categories`
 - Action: Select primary category (e.g., "IT & Networking")
 - Subcategory: Select specific skills (e.g., "Information Security & Compliance")
 - Button: Click "Next" to proceed
 
-**Step 6: Skills Selection**
+**Step 3: Skills Selection**
 - URL: `/nx/create-profile/skills`
 - Action: Select relevant skills from available options
 - Button: Click "Next" to proceed
 
-**Step 7: Professional Title**
+**Step 4: Professional Title**
 - URL: `/nx/create-profile/title`
 - Action: Enter professional title
 - Button: Click "Next" to proceed
 
-**Step 8: Employment History**
+**Step 5: Employment History**
 - URL: `/nx/create-profile/employment`
 - Action: Click "Add experience" button
 - Modal: Fill out employment form with:
@@ -311,18 +361,25 @@ The automation follows this exact sequence through Upwork's profile creation flo
   - Description: Sample job description
 - Button: Click "Save" to close modal
 
-**Step 9: Education**
+**Step 6: Education**
 - URL: `/nx/create-profile/education`
 - Action: Click "Add education" button
 - Modal: Fill out education form
 - Button: Click "Save" to close modal
 
-**Step 10: Languages**
+**Step 7: Languages**
 - URL: `/nx/create-profile/languages`
 - Action: Select languages and proficiency levels
 - Button: Click "Next" to proceed
 
-**Step 11: Location & Personal Info**
+**step 8: /nx/create-profile/overview**
+- URL: `/nx/create-profile/overview`
+- Action: Fill 100+ chars of bio
+
+**step 9: /nx/create-profile/rate**
+- URL: `/nx/create-profile/rate`
+
+**Step 10: Location & Personal Info**
 - URL: `/nx/create-profile/location`
 - Action: Fill out location details:
   - Street Address: From user data or default
@@ -688,7 +745,15 @@ The application tracks various error types:
 - `WORK_PREF_PAGE_NOT_FOUND`: Work preference page not detected
 - `WORK_PREF_CHECKBOX_NOT_FOUND`: Work preference checkbox not found
 - `RESUME_IMPORT_PAGE_NOT_FOUND`: Resume import page not detected
-- `RESUME_MANUAL_BUTTON_NOT_FOUND`: "Fill out manually" button not found
+- `RESUME_PDF_GENERATION_FAILED`: Failed to generate PDF resume
+- `RESUME_PDF_FILE_NOT_FOUND`: Generated PDF file not found on disk
+- `RESUME_UPLOAD_BUTTON_NOT_FOUND`: "Upload your resume" button not found
+- `RESUME_UPLOAD_MODAL_NOT_FOUND`: Upload modal did not appear
+- `CHOOSE_FILE_LINK_NOT_FOUND`: "Choose file" link not found in modal
+- `FILE_INPUT_NOT_FOUND`: File input not found after clicking choose file
+- `RESUME_CONTINUE_BUTTON_NOT_FOUND`: Continue button not found after resume upload
+- `RESUME_CONTINUE_BUTTON_DISABLED`: Continue button found but is disabled or not visible
+- `RESUME_MANUAL_BUTTON_NOT_FOUND`: "Fill out manually" button not found (legacy)
 - `CATEGORIES_LEFT_ITEM_NOT_FOUND`: Category selection item not found
 - `CATEGORIES_RIGHT_CHECKBOX_NOT_FOUND`: Subcategory checkbox not found
 - `CATEGORIES_NEXT_NOT_FOUND`: Next button missing on categories page
