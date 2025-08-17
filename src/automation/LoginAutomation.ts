@@ -343,8 +343,13 @@ export class LoginAutomation extends BaseAutomation {
     try {
       logger.info('Checking for phone verification flow after location step...');
       
-      // Wait a bit for any modals to appear
-      await this.randomDelay(3000, 5000);
+      // Wait for page transition after location step completion
+      await this.waitForPageTransition();
+      await this.randomDelay(2000, 3000);
+      
+      // Check current URL to see if we're still on location page or moved to next step
+      const currentUrl = this.page.url();
+      logger.info(`Current URL after location step: ${currentUrl}`);
       
       // First, check for the "Please verify your phone number" modal
       const verifyPhoneModal = await this.page.evaluate(() => {
@@ -353,14 +358,32 @@ export class LoginAutomation extends BaseAutomation {
       });
       
       if (verifyPhoneModal) {
-        logger.info('Phone verification modal detected, clicking "Send code" button...');
+        logger.info('Phone verification modal detected, waiting for modal to fully load...');
         
-        // Click the "Send code" button
+        // Wait for the modal to fully load and be interactive
+        await this.randomDelay(2000, 3000);
+        
+        // Wait for the phone number input to be present and filled
+        const phoneInput = await this.waitForSelectorWithRetry([
+          'input.air3-phone-number-remaining',
+          'input[data-ev-label="phone_number_input"]',
+          'input[type="tel"]'
+        ], 10000);
+        
+        if (phoneInput) {
+          const phoneValue = await phoneInput.evaluate((el: Element) => (el as HTMLInputElement).value);
+          logger.info(`Phone number in modal: ${phoneValue}`);
+        }
+        
+        // Wait a bit more for the button to be fully interactive
+        await this.randomDelay(1000, 2000);
+        
+        // Click the "Send code" button with more specific selector
         const sendCodeButton = await this.waitForSelectorWithRetry([
           'button#submitPhone',
           'button[data-ev-label="submit_phone"]',
-          'button.air3-btn-primary'
-        ], 5000);
+          'button.air3-btn-primary.air3-btn-block-sm'
+        ], 10000);
         
         if (!sendCodeButton) {
           logger.warn('Send code button not found');
@@ -374,16 +397,82 @@ export class LoginAutomation extends BaseAutomation {
           return this.createError('SEND_CODE_BUTTON_NOT_FOUND', 'Send code button text verification failed');
         }
         
+        // Check if button is enabled
+        const isDisabled = await sendCodeButton.evaluate((el: Element) => {
+          const button = el as HTMLButtonElement;
+          return button.disabled || button.classList.contains('disabled');
+        });
+        
+        if (isDisabled) {
+          logger.warn('Send code button is disabled, waiting for it to become enabled...');
+          await this.randomDelay(2000, 3000);
+        }
+        
         logger.info('Clicking send code button...');
         await this.clickElement(sendCodeButton);
         
         // Wait for the OTP input modal to appear
         logger.info('Waiting for OTP input modal to appear...');
         await this.randomDelay(3000, 5000);
+        
+        // Check if OTP modal appeared after first click
+        let otpModalAppeared = await this.page.evaluate(() => {
+          const h3Elements = document.querySelectorAll('h3');
+          return Array.from(h3Elements).find(h3 => h3.textContent?.includes('Enter your code'));
+        });
+        
+        if (!otpModalAppeared) {
+          logger.warn('OTP modal did not appear after first click, trying to click send code button again...');
+          
+          // Wait a bit more and try clicking again
+          await this.randomDelay(2000, 3000);
+          
+          // Try to find and click the send code button again
+          const sendCodeButtonRetry = await this.waitForSelectorWithRetry([
+            'button#submitPhone',
+            'button[data-ev-label="submit_phone"]',
+            'button.air3-btn-primary.air3-btn-block-sm'
+          ], 5000);
+          
+          if (sendCodeButtonRetry) {
+            logger.info('Clicking send code button again as fallback...');
+            await this.clickElement(sendCodeButtonRetry);
+            await this.randomDelay(3000, 5000);
+            
+            // Check again if OTP modal appeared
+            otpModalAppeared = await this.page.evaluate(() => {
+              const h3Elements = document.querySelectorAll('h3');
+              return Array.from(h3Elements).find(h3 => h3.textContent?.includes('Enter your code'));
+            });
+            
+            if (otpModalAppeared) {
+              logger.info('OTP modal appeared after retry click');
+            } else {
+              logger.warn('OTP modal still did not appear after retry click');
+            }
+          } else {
+            logger.warn('Could not find send code button for retry');
+          }
+        }
+      } else {
+        logger.info('Phone verification modal not found, checking if we need to wait longer...');
+        
+        // Wait a bit more and check again
+        await this.randomDelay(2000, 3000);
+        const verifyPhoneModalRetry = await this.page.evaluate(() => {
+          const h3Elements = document.querySelectorAll('h3');
+          return Array.from(h3Elements).find(h3 => h3.textContent?.includes('Please verify your phone number'));
+        });
+        
+        if (verifyPhoneModalRetry) {
+          logger.info('Phone verification modal found on retry, proceeding with verification...');
+          // Recursively call this method to handle the verification
+          return await this.handlePhoneVerificationAfterLocation();
+        }
       }
       
       // Now check for the OTP input modal
-      const otpModalTitle = await this.page.evaluate(() => {
+      let otpModalTitle = await this.page.evaluate(() => {
         const h3Elements = document.querySelectorAll('h3');
         return Array.from(h3Elements).find(h3 => h3.textContent?.includes('Enter your code'));
       });
@@ -398,8 +487,17 @@ export class LoginAutomation extends BaseAutomation {
           return Array.from(h3Elements).find(h3 => h3.textContent?.includes('Enter your code'));
         });
         if (!otpModalTitleRetry) {
-          logger.info('OTP input modal still not found, assuming verification not required');
-          return this.createSuccess();
+          logger.info('OTP input modal still not found, checking if profile creation is complete...');
+          
+          // Check if we've reached the final success page
+          const finalUrl = this.page.url();
+          if (finalUrl.includes('/profile') || finalUrl.includes('/dashboard') || finalUrl.includes('/welcome')) {
+            logger.info('Profile creation appears to be complete, marking as success');
+            return this.createSuccess();
+          }
+          
+          logger.warn('No verification modal found and not on final page, returning pending for retry');
+          return this.createError('PHONE_VERIFICATION_PENDING', 'Phone verification modal not found, will retry later');
         }
       }
       
