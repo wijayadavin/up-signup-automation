@@ -163,15 +163,16 @@ export class SessionService {
     return Object.entries(groups).map(([origin, items]) => ({ origin, items }));
   }
   
-  static async markOnboardingCompleted(userId: number): Promise<void> {
+  static async markOnboardingCompleted(userId: number, proxyPort: number = 10001): Promise<void> {
     try {
-      logger.info(`Marking onboarding as completed for user ${userId}`);
+      logger.info(`Marking onboarding as completed for user ${userId} with proxy port ${proxyPort}`);
       
       const db = getDatabase();
       await db
         .updateTable('users')
         .set({
           onboarding_completed_at: new Date(),
+          last_proxy_port: proxyPort,
           updated_at: new Date()
         })
         .where('id', '=', userId)
@@ -180,6 +181,75 @@ export class SessionService {
       logger.info(`Onboarding marked as completed for user ${userId}`);
     } catch (error) {
       logger.error(error, `Failed to mark onboarding as completed for user ${userId}`);
+      throw error;
+    }
+  }
+  
+  static async restoreSessionAndOpenLocationPage(userId: number, headful: boolean = false): Promise<void> {
+    try {
+      logger.info(`Restoring session and opening location page for user ${userId} in ${headful ? 'headful' : 'headless'} mode`);
+      
+      const db = getDatabase();
+      const user = await db
+        .selectFrom('users')
+        .select(['last_session_state', 'last_proxy_port', 'first_name', 'last_name'])
+        .where('id', '=', userId)
+        .executeTakeFirst();
+      
+      if (!user?.last_session_state) {
+        throw new Error(`No session state found for user ${userId}`);
+      }
+      
+      // Import required modules dynamically
+      const { BrowserManager } = await import('../browser/browserManager.js');
+      
+      const proxyPort = user.last_proxy_port || 10001;
+      logger.info(`Using proxy port ${proxyPort} for user ${userId}`);
+      
+      // Create browser manager with specified mode and proxy
+      const browserManager = new BrowserManager({ 
+        headless: !headful, // Invert headful flag for headless setting
+        disableTrackingProtection: headful, // Enable tracking protection disabling in headful mode
+        proxy: {
+          host: 'us.decodo.com',
+          port: proxyPort,
+          username: 'spmmd0qqan',
+          password: 'sZ0aawg5H8ma+mH1fO'
+        }
+      });
+      
+      // Launch browser and get page
+      const browser = await browserManager.launch();
+      const page = await browser.newPage();
+      
+      // Restore session state
+      await this.loadSessionState(page, userId);
+      
+      // Navigate to location page
+      logger.info(`Navigating to location page for user ${user.first_name} ${user.last_name}`);
+      await page.goto('https://www.upwork.com/nx/create-profile/location', { 
+        waitUntil: 'networkidle2',
+        timeout: 30000 
+      });
+      
+      logger.info(`Location page opened for user ${userId}. Browser will remain open.`);
+      logger.info('Press Ctrl+C to close the browser when you are done.');
+      
+      // Keep browser open - listen for process termination
+      process.on('SIGINT', async () => {
+        logger.info('Received SIGINT, closing browser...');
+        await browserManager.close();
+        process.exit(0);
+      });
+      
+      process.on('SIGTERM', async () => {
+        logger.info('Received SIGTERM, closing browser...');
+        await browserManager.close();
+        process.exit(0);
+      });
+      
+    } catch (error) {
+      logger.error(error, `Failed to restore session and open location page for user ${userId}`);
       throw error;
     }
   }

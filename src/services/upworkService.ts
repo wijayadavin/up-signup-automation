@@ -236,6 +236,7 @@ export class UpworkService {
     loginResult?: LoginResult;
   }> {
     let page: Page | null = null;
+    let userBrowserManager: BrowserManager | undefined;
     
     try {
       logger.info({ userId: user.id, email: user.email }, 'Processing user');
@@ -246,24 +247,30 @@ export class UpworkService {
         attempt_count: user.attempt_count + 1,
       });
 
-      // Execute login automation
-      page = await this.browserManager.newPage();
+      // Create user-specific browser manager for proxy port management
+      const userBrowserManager = new BrowserManager({
+        headless: this.browserManager.isHeadless(),
+        user: user // Pass user for proxy port management
+      });
+      
+      // Execute login automation with user-specific browser manager
+      page = await userBrowserManager.newPage();
       
       // Clear browser state to ensure we start fresh for each user
-      await this.browserManager.clearBrowserState(page);
+      await userBrowserManager.clearBrowserState(page);
       
       // Check and log current IP address before starting automation
-      const currentIP = await this.browserManager.getCurrentIP(page);
+      const currentIP = await userBrowserManager.getCurrentIP(page);
       if (currentIP) {
         logger.info({ 
           userId: user.id,
           email: user.email,
           currentIP,
-          proxyEnabled: this.browserManager.isProxyEnabled()
+          proxyEnabled: userBrowserManager.isProxyEnabled()
         }, 'Starting automation with current IP');
       }
       
-      const loginAutomation = new LoginAutomation(page, user);
+      const loginAutomation = new LoginAutomation(page, user, userBrowserManager);
       const loginResult = await loginAutomation.execute(options);
 
       // Log the result
@@ -274,6 +281,13 @@ export class UpworkService {
         error_code: loginResult.error_code,
         url: loginResult.url 
       }, 'Login automation completed');
+
+      // Clean up user-specific browser manager
+      try {
+        await userBrowserManager.close();
+      } catch (closeError) {
+        logger.warn('Failed to close user browser manager:', closeError);
+      }
 
       // Handle different result types
       if (loginResult.status === 'success') {
@@ -347,6 +361,15 @@ export class UpworkService {
           await page.close();
         } catch (error) {
           // Page might already be closed
+        }
+      }
+      
+      // Clean up user-specific browser manager if it exists
+      if (typeof userBrowserManager !== 'undefined') {
+        try {
+          await userBrowserManager.close();
+        } catch (closeError) {
+          logger.warn('Failed to close user browser manager in finally block:', closeError);
         }
       }
     }

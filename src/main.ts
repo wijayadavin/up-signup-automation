@@ -10,6 +10,7 @@ import { BrowserManager } from './browser/browserManager.js';
 import { UserService } from './services/userService.js';
 import { UpworkService } from './services/upworkService.js';
 import { ResumeGenerator } from './utils/resumeGenerator.js';
+import { SessionService } from './services/sessionService.js';
 import fs from 'fs';
 
 // Load environment variables
@@ -55,8 +56,7 @@ const visitLoginPageCmd = command({
       
       // Initialize services
       const browserManager = new BrowserManager({ 
-        headless: args.headless,
-        debug: args.debug 
+        headless: args.headless
       });
       const userService = new UserService();
       upworkService = new UpworkService(browserManager, userService);
@@ -412,8 +412,7 @@ const processUsersCmd = command({
       
       // Initialize services
       const browserManager = new BrowserManager({ 
-        headless: args.headless,
-        debug: false  // process-users always uses rotating mode for production
+        headless: args.headless
       });
       const userService = new UserService();
       const upworkService = new UpworkService(browserManager, userService);
@@ -492,8 +491,7 @@ const testProxyCmd = command({
       
       // Initialize browser manager
       const browserManager = new BrowserManager({ 
-        headless: args.headless,
-        debug: false  // test-proxy uses rotating mode to test production configuration
+        headless: args.headless
       });
       
       // Log proxy configuration
@@ -634,6 +632,44 @@ const testProxyCmd = command({
   },
 });
 
+// Restore session command
+const restoreSessionCmd = command({
+  name: 'restore-session',
+  description: 'Restore session and open location page for a user',
+  args: {
+    userId: option({
+      type: number,
+      long: 'user-id',
+      short: 'u',
+      description: 'User ID to restore session for',
+    }),
+    headful: flag({
+      type: boolean,
+      long: 'headful',
+      short: 'h',
+      description: 'Run browser in headful mode with tracking protection disabled',
+      defaultValue: () => false,
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info(`Restoring session for user ${args.userId} in ${args.headful ? 'headful' : 'headless'} mode`);
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Restore session and open location page
+      await SessionService.restoreSessionAndOpenLocationPage(args.userId, args.headful);
+      
+    } catch (error) {
+      logger.error(error, 'Failed to restore session');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
 // Main command with subcommands
 const mainCmd = command({
   name: 'up-crawler',
@@ -650,6 +686,7 @@ const mainCmd = command({
     logger.info('  process-users --upload  - Test resume upload (Step 1-4 only)');
     logger.info('  stats           - Show application statistics');
     logger.info('  test-proxy      - Test proxy configuration');
+    logger.info('  restore-session - Restore session and open location page');
     logger.info('Use --help with any command for more information');
   },
 });
@@ -676,6 +713,9 @@ switch (commandName) {
     break;
   case 'test-proxy':
     await run(testProxyCmd, commandArgs);
+    break;
+  case 'restore-session':
+    await run(restoreSessionCmd, commandArgs);
     break;
   case 'import-csv':
     await run(importCsvCmd, commandArgs);

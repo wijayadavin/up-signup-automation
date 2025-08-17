@@ -8,6 +8,7 @@ import { EducationStepHandler } from './steps/EducationStepHandler';
 import { OverviewStepHandler } from './steps/OverviewStepHandler';
 // import { LocationStepHandler } from './steps/LocationStepHandler'; // TODO: Re-enable when location step is fixed
 import { SessionService } from '../services/sessionService.js';
+import { BrowserManager } from '../browser/browserManager.js';
 
 // Create a simple logger for automation
 const logger = {
@@ -31,9 +32,11 @@ export class LoginAutomation extends BaseAutomation {
   private formAutomation: FormAutomation;
   private navigationAutomation: NavigationAutomation;
   private stepHandlers: Map<string, any>;
+  private browserManager: BrowserManager;
 
-  constructor(page: Page, user: User) {
+  constructor(page: Page, user: User, browserManager?: BrowserManager) {
     super(page, user);
+    this.browserManager = browserManager || new BrowserManager();
     this.formAutomation = new FormAutomation(page, user);
     this.navigationAutomation = new NavigationAutomation(page, user);
     
@@ -155,6 +158,41 @@ export class LoginAutomation extends BaseAutomation {
     // Additional wait to ensure redirect is complete
     await this.randomDelay(2000, 3000);
     
+    // Check for captcha and verification error messages with multiple attempts
+    let errorDetected = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      errorDetected = await this.checkForCaptchaError();
+      if (errorDetected) {
+        logger.warn(`Error detected on attempt ${attempt}`);
+        break;
+      }
+      
+      if (attempt < 3) {
+        logger.info(`No error detected on attempt ${attempt}, waiting before retry...`);
+        await this.randomDelay(1000, 2000);
+      }
+    }
+    if (errorDetected) {
+      logger.warn('Captcha or verification error detected, flagging user and updating proxy port');
+      
+      try {
+        // Get current proxy port and increment it
+        const currentProxyPort = this.user.last_proxy_port || 10001;
+        const newProxyPort = currentProxyPort + 1;
+        
+        // Flag user as captcha and update proxy port
+        await this.flagUserAsCaptcha(newProxyPort);
+        
+        return this.createError(
+          'CAPTCHA_DETECTED',
+          `Captcha/verification error detected, user flagged and proxy port updated to ${newProxyPort}`
+        );
+      } catch (error) {
+        logger.error('Failed to flag user as captcha:', error);
+        return this.createError('CAPTCHA_FLAG_FAILED', 'Failed to flag user as captcha');
+      }
+    }
+    
     // Check if we're on create profile page
     const currentUrl = this.page.url();
     logger.info(`Current URL after password submission: ${currentUrl}`);
@@ -217,8 +255,8 @@ export class LoginAutomation extends BaseAutomation {
           logger.info('Marking onboarding as completed and saving session state...');
           
           try {
-            // Mark onboarding as completed
-            await SessionService.markOnboardingCompleted(this.user.id);
+            // Mark onboarding as completed with proxy port
+            await SessionService.markOnboardingCompleted(this.user.id, 10001);
             
             // Save session state
             await SessionService.saveSessionState(this.page, this.user.id);
@@ -281,8 +319,8 @@ export class LoginAutomation extends BaseAutomation {
       logger.info('Marking onboarding as completed and saving session state...');
       
       try {
-        // Mark onboarding as completed
-        await SessionService.markOnboardingCompleted(this.user.id);
+        // Mark onboarding as completed with proxy port
+        await SessionService.markOnboardingCompleted(this.user.id, 10001);
         
         // Save session state
         await SessionService.saveSessionState(this.page, this.user.id);
@@ -369,6 +407,79 @@ export class LoginAutomation extends BaseAutomation {
     };
   }
 
+  private async checkForCaptchaError(): Promise<boolean> {
+    try {
+      logger.info('Checking for captcha and verification error messages...');
+      
+      // Look for various error messages that indicate captcha or verification issues
+      const errorDetected = await this.page.evaluate(() => {
+        // Check for form error messages
+        const errorElements = document.querySelectorAll('.air3-form-message-error');
+        for (const element of errorElements) {
+          const text = element.textContent || '';
+          if (text.includes('We cannot verify your request due to network restrictions') ||
+              text.includes('traffic blocking at your location')) {
+            return { type: 'captcha', message: text };
+          }
+        }
+        
+        // Check for alert content (verification failed)
+        const alertElements = document.querySelectorAll('.air3-alert-content');
+        for (const element of alertElements) {
+          const text = element.textContent || '';
+          if (text.includes('Verification failed')) {
+            return { type: 'verification_failed', message: text };
+          }
+        }
+        
+        // Check for any other error messages that might indicate issues
+        const allErrorElements = document.querySelectorAll('[class*="error"], [class*="alert"]');
+        for (const element of allErrorElements) {
+          const text = element.textContent || '';
+          if (text.includes('verification') && text.includes('failed')) {
+            return { type: 'verification_failed', message: text };
+          }
+        }
+        
+        return null;
+      });
+      
+      if (errorDetected) {
+        logger.warn(`Error detected: ${errorDetected.type} - ${errorDetected.message}`);
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      logger.error('Error checking for captcha/verification errors:', error);
+      return false;
+    }
+  }
+  
+  private async flagUserAsCaptcha(newProxyPort: number): Promise<void> {
+    try {
+      logger.info(`Flagging user ${this.user.id} as captcha and updating proxy port to ${newProxyPort}`);
+      
+      const db = await import('../database/connection.js');
+      const { getDatabase } = db;
+      
+      await getDatabase()
+        .updateTable('users')
+        .set({
+          captcha_flagged_at: new Date(),
+          last_proxy_port: newProxyPort,
+          updated_at: new Date()
+        })
+        .where('id', '=', this.user.id)
+        .execute();
+      
+      logger.info(`User ${this.user.id} flagged as captcha with proxy port ${newProxyPort}`);
+    } catch (error) {
+      logger.error(`Failed to flag user ${this.user.id} as captcha:`, error);
+      throw error;
+    }
+  }
+  
   private async handlePhoneVerificationAfterLocation(): Promise<AutomationResult> {
     try {
       logger.info('Checking for phone verification flow after location step...');

@@ -1,6 +1,7 @@
 import puppeteer from './puppeteer.js';
 import { getLogger } from '../utils/logger.js';
 import type { Browser, Page } from 'puppeteer';
+import type { User } from '../types/database.js';
 
 const logger = getLogger(import.meta.url);
 
@@ -24,7 +25,8 @@ export interface BrowserConfig {
     height: number;
   };
   proxy?: ProxyConfig;
-  debug?: boolean;
+  user?: User; // Add user for proxy port management
+  disableTrackingProtection?: boolean; // Disable tracking protection for headful mode
 }
 
 export class BrowserManager {
@@ -37,25 +39,30 @@ export class BrowserManager {
       timeout: config.timeout ?? Number(process.env.PUPPETEER_TIMEOUT) ?? 30000,
       userDataDir: config.userDataDir ?? (process.env.PUPPETEER_USER_DATA_DIR ?? './user-data'),
       viewport: config.viewport ?? { width: 1440, height: 1080 },
-      proxy: config.proxy ?? this.loadProxyConfigFromEnv(config.debug),
-      debug: config.debug ?? false,
+      proxy: config.proxy ?? this.loadProxyConfigFromEnv(config.user),
+      user: config.user,
+      disableTrackingProtection: config.disableTrackingProtection ?? false,
     };
   }
 
-  private loadProxyConfigFromEnv(debugMode?: boolean): ProxyConfig | undefined {
+  private loadProxyConfigFromEnv(user?: User): ProxyConfig | undefined {
     const host = process.env.PROXY_HOST;
     const envPort = process.env.PROXY_PORT;
     const username = process.env.PROXY_USER;
     const password = process.env.PROXY_PASS;
     const country = process.env.PROXY_COUNTRY;
-    const rotateMinutes = process.env.PROXY_ROTATE_MINUTES;
     const zipCode = process.env.PROXY_ZIP_CODE;
 
     if (host && envPort && username && password) {
-      // Determine port based on mode:
-      // - Debug mode: Use sticky session (10001) to maintain login state
-      // - Production mode: Use rotating (10000) for better anonymity
-      const port = debugMode ? 10001 : 10000;
+      let port: number;
+      
+      if (user) {
+        // User-specific proxy port management (sticky mode)
+        port = this.determineUserProxyPort(user);
+      } else {
+        // Default to sticky mode (port 10001+)
+        port = 10001;
+      }
       
       return {
         host,
@@ -63,12 +70,78 @@ export class BrowserManager {
         username,
         password,
         country,
-        rotateMinutes: rotateMinutes ? parseInt(rotateMinutes, 10) : undefined,
+        rotateMinutes: undefined, // Disable rotating mode
         zipCode,
       };
     }
 
     return undefined;
+  }
+  
+  // Getter methods for configuration
+  isHeadless(): boolean {
+    return this.config.headless;
+  }
+  
+  isDebugMode(): boolean {
+    return false; // Always return false since we removed debug mode
+  }
+  
+  private async killExistingBrowserProcesses(): Promise<void> {
+    try {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+      
+      // Kill any Chrome/Chromium processes that might be using our user data directory
+      const commands = [
+        `pkill -f "chrome.*${this.config.userDataDir}"`,
+        `pkill -f "chromium.*${this.config.userDataDir}"`,
+        `pkill -f "puppeteer.*${this.config.userDataDir}"`
+      ];
+      
+      for (const command of commands) {
+        try {
+          await execAsync(command);
+          logger.info(`Killed existing browser processes with command: ${command}`);
+        } catch (error) {
+          // Ignore errors if no processes were found
+          logger.debug(`No existing processes found for command: ${command}`);
+        }
+      }
+      
+      // Wait a moment for processes to fully terminate
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (error) {
+      logger.warn('Failed to kill existing browser processes:', error);
+    }
+  }
+  
+  private determineUserProxyPort(user: User): number {
+    // Check if user was flagged for captcha within the last 10 minutes
+    if (user.captcha_flagged_at) {
+      const captchaTime = new Date(user.captcha_flagged_at);
+      const now = new Date();
+      const timeDiff = now.getTime() - captchaTime.getTime();
+      const minutesDiff = timeDiff / (1000 * 60);
+      
+      if (minutesDiff < 10) {
+        // Within 10 minutes of captcha flag, increment proxy port
+        const currentPort = user.last_proxy_port || 10001;
+        const newPort = currentPort + 1;
+        logger.info(`User ${user.id} captcha flagged ${minutesDiff.toFixed(1)} minutes ago, using proxy port ${newPort}`);
+        return newPort;
+      } else {
+        // More than 10 minutes, reset to base port
+        logger.info(`User ${user.id} captcha flag is ${minutesDiff.toFixed(1)} minutes old, using base proxy port 10001`);
+        return 10001;
+      }
+    }
+    
+    // No captcha flag, use user's saved port or default
+    const userPort = user.last_proxy_port || 10001;
+    logger.info(`User ${user.id} using saved proxy port ${userPort}`);
+    return userPort;
   }
 
   async launch(): Promise<Browser> {
@@ -79,21 +152,41 @@ export class BrowserManager {
     try {
       logger.info('Launching browser...');
       
-      const args = [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--disable-features=TranslateUI',
-        '--disable-ipc-flooding-protection',
-        '--user-data-dir=' + this.config.userDataDir,
-      ];
+      // Kill any existing browser processes that might be using the same user data dir
+      await this.killExistingBrowserProcesses();
+      
+      let args: string[];
+
+      if (this.config.disableTrackingProtection && !this.config.headless) {
+        // System Chrome mode - very minimal arguments for natural browsing
+        args = [
+          '--user-data-dir=' + this.config.userDataDir,
+          '--disable-blink-features=AutomationControlled', // Hide automation detection
+        ];
+        logger.info('Using minimal arguments for system Chrome browser');
+      } else {
+        // Headless or automation mode - full arguments for stability
+        args = [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-features=TranslateUI',
+          '--disable-ipc-flooding-protection',
+          '--user-data-dir=' + this.config.userDataDir,
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
+        ];
+        logger.info('Using full browser arguments for headless/automation mode');
+      }
 
       // Add proxy configuration if available
       if (this.config.proxy) {
@@ -104,35 +197,76 @@ export class BrowserManager {
         
         const proxyServer = `${proxyHost}:${this.config.proxy.port}`;
         args.push(`--proxy-server=${proxyServer}`);
-        const proxyMode = this.config.debug ? 'sticky (debug)' : 'rotating (production)';
         logger.info({ 
           proxyServer, 
           proxyHost, 
           port: this.config.proxy.port,
-          mode: proxyMode 
+          mode: 'sticky (10-minute sessions)'
         }, 'Using Decodo proxy server');
       }
       
-      this.browser = await puppeteer.launch({
+      const launchOptions: any = {
         headless: this.config.headless,
         args,
         defaultViewport: this.config.viewport,
         timeout: this.config.timeout,
-      });
+      };
+
+      if (this.config.disableTrackingProtection && !this.config.headless) {
+        // Try to use system Chrome first for natural browsing experience
+        try {
+          launchOptions.channel = 'chrome';
+          launchOptions.ignoreDefaultArgs = false; // Use all default Chrome arguments
+          logger.info('Attempting to use system Chrome browser for natural headful browsing');
+          this.browser = await puppeteer.launch(launchOptions);
+        } catch (error) {
+          logger.warn('System Chrome not found, falling back to Chromium with natural settings');
+          // Fallback to Chromium but with more natural settings
+          launchOptions.channel = undefined;
+          launchOptions.ignoreDefaultArgs = false; // Still use default args for more natural behavior
+          this.browser = await puppeteer.launch(launchOptions);
+        }
+      } else {
+        // Use Chromium for automation/headless mode
+        launchOptions.ignoreDefaultArgs = ['--disable-extensions'];
+        logger.info('Using Chromium for headless/automation mode');
+        this.browser = await puppeteer.launch(launchOptions);
+      }
 
       logger.info('Browser launched successfully');
       return this.browser;
     } catch (error) {
       logger.error(error, 'Failed to launch browser');
+      
+      // Try to clean up any partial browser state
+      if (this.browser) {
+        try {
+          await this.browser.close();
+        } catch (closeError) {
+          logger.warn('Failed to close browser during error cleanup:', closeError);
+        }
+        this.browser = null;
+      }
+      
       throw error;
     }
   }
 
-  async newPage(): Promise<Page> {
+  async newPage(user?: User): Promise<Page> {
     const browser = await this.launch();
     
     try {
       const page = await browser.newPage();
+      
+      // If user is provided, update proxy configuration for this page
+      if (user && this.config.proxy) {
+        const userProxyPort = this.determineUserProxyPort(user);
+        if (userProxyPort !== this.config.proxy.port) {
+          logger.info(`Updating proxy port for user ${user.id} from ${this.config.proxy.port} to ${userProxyPort}`);
+          // Note: We can't change proxy port for an existing browser, but we can log it
+          // The actual proxy port change would need to happen at browser launch time
+        }
+      }
       
       // Set default timeout
       page.setDefaultTimeout(this.config.timeout);
@@ -147,14 +281,13 @@ export class BrowserManager {
           username,
           password: this.config.proxy.password,
         });
-        const proxyMode = this.config.debug ? 'sticky (debug)' : 'rotating (production)';
         logger.info({ 
           username, 
           country: this.config.proxy.country, 
           zipCode: this.config.proxy.zipCode,
           host: this.config.proxy.host,
           port: this.config.proxy.port,
-          mode: proxyMode
+          mode: 'sticky (10-minute sessions)'
         }, 'Decodo proxy authentication configured');
       }
       
@@ -219,11 +352,17 @@ export class BrowserManager {
       try {
         await this.browser.close();
         this.browser = null;
-        logger.info('Browser closed');
+        logger.info('Browser closed successfully');
       } catch (error) {
         logger.error(error, 'Failed to close browser');
-        throw error;
       }
+    }
+    
+    // Also kill any remaining browser processes
+    try {
+      await this.killExistingBrowserProcesses();
+    } catch (error) {
+      logger.warn('Failed to kill remaining browser processes during cleanup:', error);
     }
   }
 
@@ -270,7 +409,7 @@ export class BrowserManager {
       if (ipInfo && ipInfo.origin) {
         logger.info({ 
           ip: ipInfo.origin,
-          proxyMode: this.config.debug ? 'sticky (debug)' : 'rotating (production)',
+          proxyMode: 'sticky (10-minute sessions)',
           proxyEnabled: this.isProxyEnabled()
         }, 'Current IP address detected');
         return ipInfo.origin;

@@ -32,6 +32,7 @@ export interface UsersTable {
   phone: string | null;
   onboarding_completed_at: Date | null;
   last_session_state: string | null;
+  last_proxy_port: number | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
@@ -57,6 +58,7 @@ export interface User {
   phone: string | null;
   onboarding_completed_at: Date | null;
   last_session_state: string | null;
+  last_proxy_port: number | null;
   created_at: Date;
   updated_at: Date;
 }
