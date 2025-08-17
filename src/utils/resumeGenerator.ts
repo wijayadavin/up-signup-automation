@@ -57,7 +57,9 @@ export class ResumeGenerator {
 
     const countryName = getCountryName(user.country_code);
     const location = `${user.location_city || 'San Francisco'}, ${user.location_state || 'California'}, ${countryName}`;
-    const phone = '+1-555-0123'; // Default phone for privacy
+    
+    // Format phone number with country code
+    const phone = ResumeGenerator.formatPhoneNumberWithCountryCode(user.phone || '5550123456', user.country_code);
     
     return {
       fullName: `${user.first_name} ${user.last_name}`,
@@ -336,5 +338,26 @@ export class ResumeGenerator {
       logger.error('Failed to generate plain text resume:', error);
       throw error;
     }
+  }
+
+  private static formatPhoneNumberWithCountryCode(phoneNumber: string, countryCode: string): string {
+    // Remove any existing country code or formatting
+    let cleanNumber = phoneNumber.replace(/^\+?\d{1,3}\s?/, '').replace(/\D/g, '');
+    
+    // Add country code based on user's country
+    const countryCodeMap: { [key: string]: string } = {
+      'US': '+1',
+      'UK': '+44', 
+      'UA': '+380',
+      'ID': '+62'
+    };
+    
+    const prefix = countryCodeMap[countryCode.toUpperCase()];
+    if (!prefix) {
+      return phoneNumber; // Return original if country code not supported
+    }
+    
+    // Format the number with country code
+    return `${prefix} ${cleanNumber}`;
   }
 }

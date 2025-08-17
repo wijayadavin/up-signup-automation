@@ -9,6 +9,7 @@ import { OverviewStepHandler } from './steps/OverviewStepHandler';
 import { LocationStepHandler } from './steps/LocationStepHandler';
 import { SessionService } from '../services/sessionService.js';
 import { BrowserManager } from '../browser/browserManager.js';
+import { TextVerifiedService } from '../services/textVerifiedService.js';
 
 // Create a simple logger for automation
 const logger = {
@@ -703,11 +704,35 @@ export class LoginAutomation extends BaseAutomation {
       
       logger.info(`Found ${otpInputs.length} OTP input fields`);
       
-      // Fill each OTP field with test code "12345"
-      const testCode = '12345';
-      for (let i = 0; i < Math.min(otpInputs.length, testCode.length); i++) {
+      // Get real OTP from TextVerified service
+      let otpCode: string;
+      try {
+        const textVerifiedService = new TextVerifiedService();
+        logger.info('Waiting for OTP from TextVerified service...');
+        
+        // Wait for OTP with 100 second timeout
+        const receivedOtp = await textVerifiedService.waitForOTP(this.user.id, 100);
+        
+        if (!receivedOtp) {
+          logger.error('No OTP received from TextVerified within 100 seconds');
+          return this.createError('OTP_NOT_RECEIVED', 'No OTP received from TextVerified within 100 seconds');
+        }
+        
+        otpCode = receivedOtp;
+        logger.info(`✅ Received OTP from TextVerified: ${otpCode}`);
+        
+      } catch (error) {
+        logger.error('Failed to get OTP from TextVerified:', error);
+        
+        // Fallback to test code if TextVerified fails
+        logger.warn('Falling back to test OTP code 12345 due to TextVerified error');
+        otpCode = '12345';
+      }
+      
+      // Fill each OTP field with the received OTP code
+      for (let i = 0; i < Math.min(otpInputs.length, otpCode.length); i++) {
         const input = otpInputs[i];
-        const digit = testCode[i];
+        const digit = otpCode[i];
         
         logger.info(`Filling OTP field ${i + 1} with digit: ${digit}`);
         await input.focus();

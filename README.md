@@ -67,7 +67,7 @@ npm install
 
 3. Set up environment variables:
 ```bash
-cp env.example .env
+cp .env.example .env
 ```
 
 Edit `.env` with your database configuration:
@@ -133,6 +133,9 @@ The application provides several commands for different operations:
 - **`import-csv`**: Bulk import users from CSV/TSV files
 - **`restore-session`**: Restore user session and open location page for manual completion
   - `--headful`: Run browser in headful mode using system Chrome for natural browsing
+- **`wait-otp`**: Wait for OTP from TextVerified.com API
+  - `--user-id <id>`: User ID to wait for OTP
+  - `--timeout <seconds>`: Timeout in seconds (default: 50)
 
 ### Command Syntax
 
@@ -146,9 +149,10 @@ npm start <command> -- <flags>
 npm start visit-login -- --debug --headless
 npm start process-users -- --limit 5 --headless
 npm start process-users -- --upload --no-stealth
-npm start process-users -- --restore-session --limit 1
+npm start process-users -- --restore-session --no-stealth
 npm start test-proxy -- --headless
 npm start restore-session -- --user-id 1 --headful
+npm start wait-otp -- --user-id 1 --timeout 60
 
 # Incorrect syntax (flags won't be recognized):
 npm start visit-login --debug --headless  # ❌ Wrong
@@ -160,8 +164,9 @@ npm start visit-login --debug --headless  # ❌ Wrong
 node dist/main.js visit-login --debug --headless
 node dist/main.js process-users --limit 5 --headless
 node dist/main.js process-users --upload --no-stealth
-node dist/main.js process-users --restore-session --limit 1
+node dist/main.js process-users --restore-session --no-stealth
 node dist/main.js restore-session --user-id 1 --headful
+node dist/main.js wait-otp --user-id 1 --timeout 60
 ```
 
 ### Visit Login Page
@@ -422,14 +427,23 @@ Note that when using `--upload` flag, some might be auto-filled and can just pre
 
 **Step 10: Location & Personal Info**
 - URL: `/nx/create-profile/location`
-- Action: Fill out location details:
-  - Street Address: From user data or default
-  - City: From user data or default
-  - State/Province: From user data or default
-  - ZIP/Postal Code: From user data or default
-  - Birth Date: From user data or default
-- Profile Picture: Upload default profile picture
-- Button: Click "Next" to proceed
+- Action: Fill out location details with smart autocomplete:
+  - **Date of Birth**: Calendar picker with user data or default
+  - **Street Address**: Smart autocomplete with down arrow + enter selection
+  - **City**: Auto-filled from street address or manual input with autocomplete
+  - **State/Province**: Auto-filled from city selection or manual input
+  - **ZIP/Postal Code**: From user data or default
+  - **Phone Number**: From user data or default format
+- **Profile Picture**: Upload default profile picture with verification
+- **Phone Verification**: 
+  - Click "Next" button to trigger verification modal
+  - Wait for "Send code" button and click it
+  - **Real OTP Integration**: Get OTP from TextVerified.com API (not hardcoded "12345")
+  - **Smart OTP Handling**: Check for existing OTP before sending code, or get new OTP after sending
+  - **Fallback Support**: Falls back to test code if TextVerified API fails
+  - **Comprehensive Error Detection**: Handles expired codes, invalid inputs, retry messages
+  - **Modal Detection**: Handles both "send verification" and "enter your code" modals
+- Button: Click "Next" to proceed after verification
 
 #### 6.3: Smart Navigation & Fallbacks
 The automation includes robust fallback mechanisms:
@@ -494,6 +508,39 @@ The system takes screenshots at key moments for debugging and verification:
 - **after_login**: Shows the create profile page after successful login
 - **create_profile**: Shows the final profile creation page
 - **login-page**: Shows the initial login page for troubleshooting
+
+### Recent Improvements & New Features
+
+#### Enhanced Phone Verification Flow
+- **Real OTP Integration**: Uses TextVerified.com API instead of hardcoded "12345"
+- **Smart OTP Handling**: Checks for existing OTP before sending code, or gets new OTP after sending
+- **Fallback Support**: Falls back to test code if TextVerified API fails
+- **Robust Modal Detection**: Handles both "send verification" and "enter your code" modals
+- **Comprehensive Error Detection**: Detects expired codes, invalid inputs, retry messages
+- **Visual Error State Detection**: Checks for error styling in input fields
+- **Proper Success/Failure Handling**: No more false success reports
+
+#### Enhanced Location Step
+- **Smart Address Input**: Character-by-character typing with autocomplete selection
+- **Correct Phone Number**: No country code prefix, uses raw phone number (e.g., "2314992031")
+- **Field Verification**: Comprehensive verification of all fields before clicking Next button (except address due to autocomplete)
+- **Auto-Retry Logic**: Automatically retries failed field inputs with proper validation
+- **Smart Address Autocomplete**: Direct keyboard navigation (down arrow + enter)
+- **City Field**: Auto-detection if already filled from street address
+- **State Field**: Auto-detection if already filled from city selection
+- **Efficient Processing**: Skips redundant input when fields are auto-populated
+
+#### Session Management
+- **Restore-Session Flag**: Reuse existing sessions instead of fresh login
+- **Session State Saving**: Automatically saves cookies, localStorage, and browser state
+- **Proxy Port Management**: User-specific proxy ports with automatic increment
+- **Fallback Logic**: Graceful fallback to normal login if session restoration fails
+
+#### Performance Optimizations
+- **Reduced Network Idle Timeouts**: Faster page transitions (200ms-1s vs 1-2s)
+- **Shorter Navigation Timeouts**: Faster navigation (5-8s vs 10-15s)
+- **Optimized Wait Strategies**: Uses `domcontentloaded` instead of `networkidle2`
+- **Better Error Recovery**: Faster retry mechanisms with shorter delays
 
 ### Result Tracking
 
@@ -649,6 +696,89 @@ This command will:
 3. Complete location details manually in the opened browser
 4. Press Ctrl+C to close when finished
 
+### Wait for OTP from TextVerified.com
+Wait for SMS verification codes from TextVerified.com API for phone verification:
+
+```bash
+# Wait for OTP for user ID 1 with default timeout (50 seconds)
+npm start wait-otp -- --user-id 1
+
+# Wait for OTP with custom timeout (60 seconds)
+npm start wait-otp -- --user-id 1 --timeout 60
+
+# Test TextVerified API and list SMS messages
+npm start test-textverified
+
+# Check SMS messages by phone number
+npm start check-sms -- --phone 2314992031
+
+# Check SMS messages from last 5 minutes only
+npm start check-sms -- --phone 2314992031 --recent
+```
+
+This command will:
+- **Initialize TextVerified Service**: Connect to TextVerified.com API using your credentials
+- **Check Account Balance**: Display your current TextVerified account balance
+- **Get Last OTP**: Returns the most recent OTP from all available SMS messages (not just recent ones)
+- **Extract OTP**: Parse and display the verification code from SMS messages
+- **Timeout Handling**: Exit gracefully if no SMS is received within the timeout period
+
+**Environment Variables Required:**
+```env
+TEXTVERIFIED_API_KEY=your_api_key
+TEXTVERIFIED_EMAIL=your_email
+```
+
+**Example Output:**
+```
+[INFO] Waiting for OTP for user 1 (timeout: 50s)
+[INFO] Current balance: 0.5
+[INFO] Polling for SMS messages...
+[INFO] Found 3 SMS messages
+[INFO] ✅ OTP found in SMS: 12345
+[INFO] SMS Message: Your verification code is 12345
+OTP: 12345
+```
+
+**Use Cases:**
+- **Manual Phone Verification**: Get real SMS codes for phone verification steps
+- **Real OTP Testing**: Test with actual SMS codes instead of hardcoded values
+- **Production Automation**: Integrate with real phone verification services
+- **Debugging Verification**: Troubleshoot phone verification issues with real codes
+
+### Check SMS Messages
+Check SMS messages from TextVerified.com API by phone number:
+
+```bash
+# Check all SMS messages for a phone number
+npm start check-sms -- --phone 2314992031
+
+# Check only recent SMS messages (last 5 minutes)
+npm start check-sms -- --phone 2314992031 --recent
+```
+
+This command will:
+- **Filter by Phone Number**: Shows only SMS messages for the specified phone number
+- **Parse OTP Codes**: Automatically extracts and displays OTP codes from SMS content
+- **Time Filtering**: Option to show only messages from the last 5 minutes
+- **Detailed Output**: Shows timestamp, OTP code, and full SMS message content
+
+**Example Output:**
+```
+📱 Extracted OTP Codes:
+1. [8/17/2025, 11:23:12 PM] OTP: 41592
+   Message: Your Upwork verification code is 41592.
+2. [8/17/2025, 3:53:26 PM] OTP: 44682
+   Message: Your Upwork verification code is 44682.
+```
+
+**Integration with Automation:**
+The automation now automatically integrates with TextVerified:
+1. **Real OTP Usage**: Automation uses real OTP from TextVerified instead of hardcoded "12345"
+2. **Smart OTP Handling**: Checks for existing OTP before sending code, or gets new OTP after sending
+3. **Fallback Support**: Falls back to test code if TextVerified API fails
+4. **Automatic Integration**: No manual intervention needed - OTP is automatically retrieved and entered
+
 ### Test Proxy Configuration
 Test your proxy configuration and verify IP details:
 
@@ -742,6 +872,13 @@ assets/
 - `UPWORK_LOGIN_URL`: Upwork login page URL
 - `DEBUG_EMAIL`: (Optional) Email for reference (not used for automation)
 - `DEBUG_PASSWORD`: (Optional) Password for reference (not used for automation)
+
+### TextVerified.com API Configuration
+
+For SMS verification with real phone numbers:
+
+- `TEXTVERIFIED_API_KEY`: Your TextVerified.com API key
+- `TEXTVERIFIED_EMAIL`: Your TextVerified.com account email
 
 ### Proxy Configuration (Decodo)
 

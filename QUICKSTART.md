@@ -20,7 +20,7 @@
 
 3. **Set up environment:**
    ```bash
-   cp env.example .env
+   cp .env.example .env
    ```
    
    Edit `.env` with your database configuration:

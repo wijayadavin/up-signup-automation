@@ -11,6 +11,7 @@ import { UserService } from './services/userService.js';
 import { UpworkService } from './services/upworkService.js';
 import { ResumeGenerator } from './utils/resumeGenerator.js';
 import { SessionService } from './services/sessionService.js';
+import { TextVerifiedService } from './services/textVerifiedService.js';
 import fs from 'fs';
 
 // Load environment variables
@@ -702,6 +703,215 @@ const restoreSessionCmd = command({
   }
 });
 
+// Test TextVerified services command
+const testTextVerifiedCmd = command({
+  name: 'test-textverified',
+  description: 'Test TextVerified.com API and list SMS messages',
+  args: {},
+  handler: async () => {
+    try {
+      logger.info('Testing TextVerified.com API...');
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize TextVerified service
+      const textVerifiedService = new TextVerifiedService();
+      
+      // Get account details first
+      await textVerifiedService.getAccountDetails();
+      
+      // Get SMS list
+      await textVerifiedService.getSmsList();
+      
+      logger.info('✅ TextVerified API test completed successfully');
+      
+    } catch (error) {
+      logger.error(error, 'Failed to test TextVerified API');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// Check SMS messages command
+const checkSmsCmd = command({
+  name: 'check-sms',
+  description: 'Check SMS messages from TextVerified.com API by phone number',
+  args: {
+    phoneNumber: option({
+      type: string,
+      long: 'phone',
+      short: 'p',
+      description: 'Phone number to filter SMS messages (required)',
+    }),
+    recent: flag({
+      type: boolean,
+      long: 'recent',
+      short: 'r',
+      description: 'Only check SMS messages from the last 5 minutes',
+      defaultValue: () => false,
+    }),
+  },
+  handler: async (args) => {
+    try {
+      const timeFilter = args.recent ? ' (last 5 minutes only)' : '';
+      logger.info(`Checking SMS messages for phone number: ${args.phoneNumber}${timeFilter}`);
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize TextVerified service
+      const textVerifiedService = new TextVerifiedService();
+      
+      // Get account details first
+      await textVerifiedService.getAccountDetails();
+      
+      // Check SMS messages by phone number only
+      const result = await textVerifiedService.checkSmsWithStatus(args.phoneNumber);
+      
+      // Filter by time if requested
+      let filteredData = result.response.data;
+      let filteredCount = result.smsCount;
+      
+      if (args.recent && result.response.data) {
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        filteredData = result.response.data.filter((sms: any) => {
+          const smsDate = new Date(sms.createdAt);
+          return smsDate > fiveMinutesAgo;
+        });
+        filteredCount = filteredData.length;
+        
+        logger.info(`Filtered to ${filteredCount} SMS message(s) from the last 5 minutes`);
+      }
+      
+      // Parse OTP codes from SMS content
+      if (filteredData && filteredData.length > 0) {
+        filteredData = filteredData.map((sms: any) => {
+          const parsedSms = { ...sms };
+          
+          // Extract OTP code from SMS content
+          if (sms.smsContent) {
+            // Look for patterns like "verification code is 12345" or "code is 12345"
+            const otpPatterns = [
+              /verification code is (\d{4,6})/i,
+              /code is (\d{4,6})/i,
+              /code: (\d{4,6})/i,
+              /(\d{4,6})/ // Fallback: any 4-6 digit number
+            ];
+            
+            for (const pattern of otpPatterns) {
+              const match = sms.smsContent.match(pattern);
+              if (match) {
+                parsedSms.extractedOtp = match[1];
+                break;
+              }
+            }
+            
+            // If no OTP found, try to use the parsedCode from API if available
+            if (!parsedSms.extractedOtp && sms.parsedCode) {
+              parsedSms.extractedOtp = sms.parsedCode;
+            }
+          }
+          
+          return parsedSms;
+        });
+      }
+      
+      // Output results
+      console.log(`Status Code: ${result.statusCode}`);
+      console.log(`SMS Count: ${filteredCount}${args.recent ? ' (filtered from last 5 minutes)' : ''}`);
+      
+      // Create filtered response
+      const filteredResponse = {
+        ...result.response,
+        data: filteredData,
+        count: filteredCount
+      };
+      
+      console.log(`Response: ${JSON.stringify(filteredResponse, null, 2)}`);
+      
+      // Display extracted OTP codes
+      if (filteredData && filteredData.length > 0) {
+        console.log('\n📱 Extracted OTP Codes:');
+        filteredData.forEach((sms: any, index: number) => {
+          const timestamp = new Date(sms.createdAt).toLocaleString();
+          const otp = sms.extractedOtp || 'Not found';
+          console.log(`${index + 1}. [${timestamp}] OTP: ${otp}`);
+          if (sms.smsContent) {
+            console.log(`   Message: ${sms.smsContent.trim()}`);
+          }
+        });
+      }
+      
+      if (filteredCount > 0) {
+        logger.info(`✅ Found ${filteredCount} SMS message(s) for ${args.phoneNumber}${args.recent ? ' in the last 5 minutes' : ''}`);
+      } else {
+        logger.info(`ℹ️ No SMS messages found for ${args.phoneNumber}${args.recent ? ' in the last 5 minutes' : ''}`);
+      }
+      
+    } catch (error) {
+      logger.error(error, 'Failed to check SMS messages');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// Wait for OTP command
+const waitOtpCmd = command({
+  name: 'wait-otp',
+  description: 'Wait for OTP from TextVerified.com API for a specific user',
+  args: {
+    userId: option({
+      type: number,
+      long: 'user-id',
+      short: 'u',
+      description: 'User ID to wait for OTP',
+    }),
+    timeout: option({
+      type: number,
+      long: 'timeout',
+      short: 't',
+      description: 'Timeout in seconds',
+      defaultValue: () => 50,
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info(`Waiting for OTP for user ${args.userId} (timeout: ${args.timeout}s)`);
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize TextVerified service
+      const textVerifiedService = new TextVerifiedService();
+      
+      // Get account details first
+      await textVerifiedService.getAccountDetails();
+      
+      // Wait for OTP
+      const otp = await textVerifiedService.waitForOTP(args.userId, args.timeout);
+      
+      if (otp) {
+        logger.info(`✅ OTP received: ${otp}`);
+        console.log(`OTP: ${otp}`);
+      } else {
+        logger.warn('❌ No OTP received within timeout period');
+        process.exit(1);
+      }
+      
+    } catch (error) {
+      logger.error(error, 'Failed to wait for OTP');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
 // Main command with subcommands
 const mainCmd = command({
   name: 'up-crawler',
@@ -719,6 +929,9 @@ const mainCmd = command({
     logger.info('  stats           - Show application statistics');
     logger.info('  test-proxy      - Test proxy configuration');
     logger.info('  restore-session - Restore session and open location page');
+    logger.info('  wait-otp        - Wait for OTP from TextVerified.com API');
+    logger.info('  test-textverified - Test TextVerified.com API and list services');
+    logger.info('  check-sms        - Check SMS messages with status code');
     logger.info('Use --help with any command for more information');
   },
 });
@@ -751,6 +964,15 @@ switch (commandName) {
     break;
   case 'import-csv':
     await run(importCsvCmd, commandArgs);
+    break;
+  case 'test-textverified':
+    await run(testTextVerifiedCmd, commandArgs);
+    break;
+  case 'check-sms':
+    await run(checkSmsCmd, commandArgs);
+    break;
+  case 'wait-otp':
+    await run(waitOtpCmd, commandArgs);
     break;
   default:
     await run(mainCmd, process.argv.slice(2));

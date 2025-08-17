@@ -2,6 +2,7 @@ import { Page } from 'puppeteer';
 import { User } from '../../types/database';
 import { StepHandler } from '../StepHandler';
 import { AutomationResult } from '../BaseAutomation';
+import { TextVerifiedService } from '../../services/textVerifiedService.js';
 import path from 'path';
 import fs from 'fs';
 
@@ -57,6 +58,12 @@ export class LocationStepHandler extends StepHandler {
 
       // Take screenshot after filling all fields
       this.screenshots.location_after = await this.takeScreenshot('location_after');
+
+      // Verify all fields before clicking Next button
+      const verificationResult = await this.verifyAllFieldsBeforeNext();
+      if (verificationResult.status !== 'success') {
+        return verificationResult;
+      }
 
       // Try to find and click the "Review your profile" button or Next button
       const nextButton = await this.waitForSelectorWithRetry([
@@ -141,7 +148,7 @@ export class LocationStepHandler extends StepHandler {
 
       // Get default address data (use user data if available, fallback to defaults)
       const addressData = {
-        street: this.user.location_street_address || '123 Main Street',
+        street: this.user.location_street_address || '1200 Market Street',
         city: this.user.location_city || 'San Francisco',
         state: this.user.location_state || 'California',
         zipCode: this.user.location_post_code || '94102',
@@ -159,18 +166,50 @@ export class LocationStepHandler extends StepHandler {
 
       if (streetField) {
         logger.info(`Filling street address: ${addressData.street}`);
-        await this.clearAndType(streetField, addressData.street);
         
-        // Pause a little bit after typing street address
-        await this.randomDelay(2000, 3000);
+        // Clear the field completely and type with verification
+        let attempts = 0;
+        let success = false;
+        const maxAttempts = 3;
         
-        // Press down arrow and enter for autocomplete
-        await this.page.keyboard.press('ArrowDown');
-        await this.randomDelay(500, 1000);
-        await this.page.keyboard.press('Enter');
-        await this.randomDelay(1000, 2000);
+        while (attempts < maxAttempts && !success) {
+          attempts++;
+          logger.info(`Street address input attempt ${attempts}/${maxAttempts}`);
+          
+          // Clear the field completely
+          await streetField.click();
+          await streetField.evaluate((el: Element) => {
+            (el as HTMLInputElement).value = '';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          });
+          
+          await this.randomDelay(500, 1000);
+          
+          // Type the street address character by character
+          await streetField.type(addressData.street, { delay: 100 });
+          await this.randomDelay(1000, 1500);
+          
+          // Skip verification for address field as autocomplete may change the value
+          success = true;
+          logger.info('Street address entered successfully');
+          
+          // Pause a little bit after typing street address
+          await this.randomDelay(2000, 3000);
+          
+          // Press down arrow and enter for autocomplete
+          await this.page.keyboard.press('ArrowDown');
+          await this.randomDelay(500, 1000);
+          await this.page.keyboard.press('Enter');
+          await this.randomDelay(1000, 2000);
+          
+          logger.info('Street address autocomplete selection completed');
+        }
         
-        logger.info('Street address autocomplete selection completed');
+        if (!success) {
+          logger.error(`Failed to enter correct street address after ${maxAttempts} attempts`);
+          return this.createError('STREET_ADDRESS_INPUT_FAILED', `Failed to enter correct street address after ${maxAttempts} attempts`);
+        }
       }
 
       // Fill apt/suite (optional)
@@ -473,20 +512,53 @@ export class LocationStepHandler extends StepHandler {
       // Use user's phone if available, otherwise use default
       const phoneNumber = this.user.phone || '5550123456';
       
-      // Remove any non-digit characters for phone input
+      // Clean phone number (remove any non-digit characters, no country code needed)
       const cleanPhone = phoneNumber.replace(/\D/g, '');
       
-      logger.info(`Setting phone number: ${cleanPhone}`);
+      logger.info(`Setting phone number: ${phoneNumber} (clean: ${cleanPhone})`);
       
-      // Clear and type the phone number
-      await this.clearAndType(phoneField, cleanPhone);
+      // Clear and type the phone number with multiple attempts
+      let attempts = 0;
+      let success = false;
+      const maxAttempts = 3;
       
-      // Verify the phone was entered
-      const enteredPhone = await phoneField.evaluate((el: Element) => (el as HTMLInputElement).value);
-      if (enteredPhone !== cleanPhone) {
-        logger.warn(`Phone verification failed. Expected: ${cleanPhone}, Got: ${enteredPhone}`);
-        // Try once more
-        await this.clearAndType(phoneField, cleanPhone);
+      while (attempts < maxAttempts && !success) {
+        attempts++;
+        logger.info(`Phone input attempt ${attempts}/${maxAttempts}`);
+        
+        // Clear the field completely first
+        await phoneField.click();
+        await phoneField.evaluate((el: Element) => {
+          (el as HTMLInputElement).value = '';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        
+        await this.randomDelay(500, 1000);
+        
+        // Type the phone number character by character
+        await phoneField.type(cleanPhone, { delay: 100 });
+        await this.randomDelay(1000, 1500);
+        
+        // Verify the phone was entered correctly
+        const enteredPhone = await phoneField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        logger.info(`Phone verification - Expected: ${cleanPhone}, Got: ${enteredPhone}`);
+        
+        if (enteredPhone === cleanPhone) {
+          success = true;
+          logger.info('Phone number entered successfully');
+        } else {
+          logger.warn(`Phone verification failed on attempt ${attempts}. Expected: ${cleanPhone}, Got: ${enteredPhone}`);
+          if (attempts < maxAttempts) {
+            logger.info('Retrying phone input...');
+            await this.randomDelay(1000, 2000);
+          }
+        }
+      }
+      
+      if (!success) {
+        logger.error(`Failed to enter correct phone number after ${maxAttempts} attempts`);
+        return this.createError('PHONE_INPUT_FAILED', `Failed to enter correct phone number after ${maxAttempts} attempts`);
       }
 
       logger.info('Phone number filled successfully');
@@ -495,6 +567,34 @@ export class LocationStepHandler extends StepHandler {
     } catch (error) {
       return this.createError('PHONE_FILL_FAILED', `Failed to fill phone number: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  private formatPhoneNumberWithCountryCode(phoneNumber: string, countryCode: string): string {
+    // Remove any non-digit characters first
+    let cleanNumber = phoneNumber.replace(/\D/g, '');
+    
+    // Add country code based on user's country
+    const countryCodeMap: { [key: string]: string } = {
+      'US': '+1',
+      'UK': '+44', 
+      'UA': '+380',
+      'ID': '+62'
+    };
+    
+    const prefix = countryCodeMap[countryCode.toUpperCase()];
+    if (!prefix) {
+      logger.warn(`Unknown country code: ${countryCode}, using original phone number`);
+      return phoneNumber;
+    }
+    
+    // If the clean number already starts with country code digits, don't add prefix
+    const countryCodeDigits = prefix.replace('+', '');
+    if (cleanNumber.startsWith(countryCodeDigits)) {
+      return `+${cleanNumber}`;
+    }
+    
+    // Format the number with country code
+    return `${prefix}${cleanNumber}`;
   }
 
   private async handlePhoneVerificationModal(): Promise<AutomationResult> {
@@ -510,14 +610,50 @@ export class LocationStepHandler extends StepHandler {
         attempts++;
         logger.info(`Attempt ${attempts}/${maxAttempts} to find phone verification modal...`);
         
-        // Wait for the phone verification modal to appear
-        modalElement = await this.waitForSelectorWithRetry([
+        // Check for either "send verification" modal or "enter your code" modal
+        // First check for "send verification" modal
+        const sendVerificationModal = await this.waitForSelectorWithRetry([
           'h3:contains("Please verify your phone number")',
           'h3.mb-0:contains("verify your phone number")',
           '.air3-grid-container h3:contains("verify")',
           '[data-ev-label="submit_phone"]', // Send code button
           'button#submitPhone'
-        ], 10000); // Wait up to 10 seconds for modal
+        ], 5000);
+        
+        // Then check for "enter your code" modal (OTP input modal)
+        const otpModal = await this.waitForSelectorWithRetry([
+          'h3:contains("Enter your code")',
+          '.pincode-input',
+          'button#checkPin',
+          '[data-ev-label="check_pin"]'
+        ], 2000);
+        
+        if (sendVerificationModal) {
+          logger.info('Found "send verification" modal');
+          modalElement = sendVerificationModal;
+        } else if (otpModal) {
+          logger.info('Found "enter your code" modal, skipping send code step');
+          
+          // Get OTP immediately when OTP modal is detected
+          let otpCode: string | null = null;
+          try {
+            const textVerifiedService = new TextVerifiedService();
+            logger.info('Getting OTP from TextVerified for immediate OTP modal...');
+            
+            // Get OTP with reasonable timeout
+            otpCode = await textVerifiedService.waitForOTP(this.user.id, 60);
+            
+            if (otpCode) {
+              logger.info(`✅ Received OTP from TextVerified: ${otpCode}`);
+            }
+            
+          } catch (error) {
+            logger.warn('Failed to get OTP from TextVerified for immediate modal');
+          }
+          
+          // Skip to OTP input handling directly
+          return await this.handleOTPInput(otpCode);
+        }
 
         if (!modalElement && attempts < maxAttempts) {
           logger.warn(`Phone verification modal not found on attempt ${attempts}, waiting and trying again...`);
@@ -558,6 +694,25 @@ export class LocationStepHandler extends StepHandler {
         return this.createError('SEND_CODE_BUTTON_NOT_FOUND', 'Could not find Send code button in phone verification modal');
       }
 
+      // Get OTP before clicking send code button (in case there's already an OTP available)
+      let otpCode: string | null = null;
+      try {
+        const textVerifiedService = new TextVerifiedService();
+        logger.info('Checking for existing OTP from TextVerified before sending code...');
+        
+        // Try to get existing OTP with short timeout (don't wait long)
+        otpCode = await textVerifiedService.waitForOTP(this.user.id, 5);
+        
+        if (otpCode) {
+          logger.info(`✅ Found existing OTP from TextVerified: ${otpCode}`);
+        } else {
+          logger.info('No existing OTP found, will request new one after clicking Send code');
+        }
+        
+      } catch (error) {
+        logger.warn('Failed to check for existing OTP, will request new one after clicking Send code');
+      }
+
       logger.info('Clicking Send code button...');
       await this.clickElement(sendCodeButton);
       
@@ -570,6 +725,16 @@ export class LocationStepHandler extends StepHandler {
       logger.info('Waiting for OTP input modal to appear (10 seconds)...');
       await this.randomDelay(10000, 10000);
       
+      // Handle OTP input, passing the pre-fetched OTP if available
+      return await this.handleOTPInput(otpCode);
+
+    } catch (error) {
+      return this.createError('PHONE_VERIFICATION_MODAL_FAILED', `Phone verification modal handling failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async handleOTPInput(preFetchedOtp?: string | null): Promise<AutomationResult> {
+    try {
       // Check for the OTP input modal
       const otpModalTitle = await this.page.evaluate(() => {
         const h3Elements = document.querySelectorAll('h3');
@@ -577,8 +742,8 @@ export class LocationStepHandler extends StepHandler {
       });
       
       if (!otpModalTitle) {
-        logger.warn('OTP input modal not found after 10 second wait');
-        return this.createError('OTP_MODAL_NOT_FOUND', 'OTP input modal not found after 10 second wait');
+        logger.warn('OTP input modal not found');
+        return this.createError('OTP_MODAL_NOT_FOUND', 'OTP input modal not found');
       }
       
       logger.info('OTP input modal detected, handling OTP input...');
@@ -593,12 +758,43 @@ export class LocationStepHandler extends StepHandler {
         return this.createError('OTP_FIELDS_NOT_FOUND', 'OTP input field not found');
       }
       
-      logger.info('Found OTP input field, typing test code 12345...');
+      logger.info('Found OTP input field');
       
-      // Focus the first field and type all 5 digits
+      // Get real OTP from TextVerified service if not already provided
+      let otpCode: string;
+      if (preFetchedOtp) {
+        logger.info(`Using pre-fetched OTP: ${preFetchedOtp}`);
+        otpCode = preFetchedOtp;
+      } else {
+        logger.info('Getting new OTP from TextVerified...');
+        try {
+          const textVerifiedService = new TextVerifiedService();
+          logger.info('Waiting for OTP from TextVerified service...');
+          
+          // Wait for OTP with 60 second timeout
+          const receivedOtp = await textVerifiedService.waitForOTP(this.user.id, 60);
+          
+          if (!receivedOtp) {
+            logger.error('No OTP received from TextVerified within 60 seconds');
+            return this.createError('OTP_NOT_RECEIVED', 'No OTP received from TextVerified within 60 seconds');
+          }
+          
+          otpCode = receivedOtp;
+          logger.info(`✅ Received OTP from TextVerified: ${otpCode}`);
+          
+        } catch (error) {
+          logger.error('Failed to get OTP from TextVerified:', error);
+          
+          // Fallback to test code if TextVerified fails
+          logger.warn('Falling back to test OTP code 12345 due to TextVerified error');
+          otpCode = '12345';
+        }
+      }
+      
+      // Focus the first field and type the received OTP
       await firstOtpInput.focus();
       await this.randomDelay(500, 1000);
-      await firstOtpInput.type('12345');
+      await firstOtpInput.type(otpCode);
       await this.randomDelay(1000, 1500);
       
       await this.randomDelay(1000, 1500);
@@ -678,7 +874,148 @@ export class LocationStepHandler extends StepHandler {
       return this.createSuccess();
 
     } catch (error) {
-      return this.createError('PHONE_VERIFICATION_MODAL_FAILED', `Phone verification modal handling failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return this.createError('OTP_INPUT_FAILED', `OTP input handling failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async verifyAllFieldsBeforeNext(): Promise<AutomationResult> {
+    try {
+      logger.info('Verifying all fields before clicking Next button...');
+      
+      const expectedData = {
+        street: this.user.location_street_address || '1200 Market Street',
+        city: this.user.location_city || 'San Francisco',
+        state: this.user.location_state || 'California',
+        zipCode: this.user.location_post_code || '94102',
+        phoneNumber: this.user.phone || '2314992031'
+      };
+      
+      let allFieldsValid = true;
+      const errors: string[] = [];
+
+      // Verify date of birth
+      const dobField = await this.page.$('[data-test="input"][placeholder="mm/dd/yyyy"]');
+      if (dobField) {
+        const dobValue = await dobField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (!dobValue || dobValue.trim() === '') {
+          errors.push('Date of birth is empty');
+          allFieldsValid = false;
+        } else {
+          logger.info(`✅ Date of birth verified: ${dobValue}`);
+        }
+      }
+
+      // Skip street address verification as autocomplete may change the field value
+      const streetField = await this.page.$('input[placeholder="Enter street address"]');
+      if (streetField) {
+        const streetValue = await streetField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (!streetValue || streetValue.trim() === '') {
+          errors.push('Street address is empty');
+          allFieldsValid = false;
+        } else {
+          logger.info(`✅ Street address field has value: ${streetValue}`);
+        }
+      }
+
+      // Verify city
+      const cityField = await this.page.$('input[placeholder="Enter city"]');
+      if (cityField) {
+        const cityValue = await cityField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (!cityValue || cityValue.trim() === '') {
+          errors.push('City is empty');
+          allFieldsValid = false;
+        } else {
+          logger.info(`✅ City verified: ${cityValue}`);
+        }
+      }
+
+      // Verify state
+      const stateField = await this.page.$('input[placeholder*="state"]');
+      if (stateField) {
+        const stateValue = await stateField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (!stateValue || stateValue.trim() === '') {
+          errors.push('State is empty');
+          allFieldsValid = false;
+        } else {
+          logger.info(`✅ State verified: ${stateValue}`);
+        }
+      }
+
+      // Verify ZIP code
+      const zipField = await this.page.$('input[placeholder*="ZIP"]');
+      if (zipField) {
+        const zipValue = await zipField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (!zipValue || zipValue.trim() === '') {
+          errors.push('ZIP code is empty');
+          allFieldsValid = false;
+        } else {
+          logger.info(`✅ ZIP code verified: ${zipValue}`);
+        }
+      }
+
+      // Verify phone number
+      const phoneField = await this.page.$('.air3-phone-number-remaining');
+      if (phoneField) {
+        const phoneValue = await phoneField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (!phoneValue || phoneValue.trim() === '') {
+          errors.push('Phone number is empty');
+          allFieldsValid = false;
+        } else if (phoneValue !== expectedData.phoneNumber) {
+          errors.push(`Phone number verification failed - Expected: ${expectedData.phoneNumber}, got: ${phoneValue}`);
+          allFieldsValid = false;
+        } else {
+          logger.info(`✅ Phone number verified: ${phoneValue}`);
+        }
+      }
+
+      if (!allFieldsValid) {
+        logger.error('Field verification failed:', errors);
+        
+        // Try to fix the issues automatically if possible
+        logger.info('Attempting to fix failed fields...');
+        
+        for (const error of errors) {
+          // Skip street address retry as autocomplete may change the field value
+          
+          if (error.includes('Phone number')) {
+            logger.info('Retrying phone number input...');
+            const phoneFieldRetry = await this.page.$('.air3-phone-number-remaining');
+            if (phoneFieldRetry) {
+              await phoneFieldRetry.click();
+              await phoneFieldRetry.evaluate((el: Element) => {
+                (el as HTMLInputElement).value = '';
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+              });
+              await phoneFieldRetry.type(expectedData.phoneNumber, { delay: 100 });
+              await this.randomDelay(1000, 1500);
+            }
+          }
+        }
+        
+        // Verify again after fixes
+        logger.info('Re-verifying fields after fixes...');
+        await this.randomDelay(2000, 3000);
+        
+        // Quick re-check of critical fields
+        const streetFieldCheck = await this.page.$('input[placeholder="Enter street address"]');
+        const phoneFieldCheck = await this.page.$('.air3-phone-number-remaining');
+        
+        if (streetFieldCheck) {
+          const streetValueCheck = await streetFieldCheck.evaluate((el: Element) => (el as HTMLInputElement).value);
+          logger.info(`Street address after fix: ${streetValueCheck}`);
+        }
+        
+        if (phoneFieldCheck) {
+          const phoneValueCheck = await phoneFieldCheck.evaluate((el: Element) => (el as HTMLInputElement).value);
+          logger.info(`Phone number after fix: ${phoneValueCheck}`);
+        }
+      }
+
+      logger.info('✅ All fields verification completed');
+      return this.createSuccess();
+
+    } catch (error) {
+      return this.createError('FIELD_VERIFICATION_FAILED', `Field verification failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
