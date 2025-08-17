@@ -45,11 +45,11 @@ export class BaseAutomation {
   // Wait utilities
   protected async waitForPageReady(): Promise<void> {
     try {
-      // Use Puppeteer's networkidle wait
-      await this.page.waitForNetworkIdle({ idleTime: 500 });
+      // Use Puppeteer's networkidle wait with shorter timeout
+      await this.page.waitForNetworkIdle({ idleTime: 200, timeout: 5000 });
     } catch (error) {
       // Fallback to timeout for compatibility
-      await this.randomDelay(2000, 3000);
+      await this.randomDelay(1000, 1500);
     }
   }
 
@@ -93,7 +93,7 @@ export class BaseAutomation {
   // Navigation utilities
   protected async waitForNavigation(): Promise<void> {
     try {
-      await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+      await this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 });
     } catch (error) {
       // Navigation might have already completed
       logger.debug('Navigation timeout, continuing...');
@@ -104,15 +104,15 @@ export class BaseAutomation {
   protected async waitForPageTransition(): Promise<void> {
     logger.debug('Waiting for page transition...');
     
-    // Wait for network to be idle
+    // Wait for network to be idle with shorter timeout
     try {
-      await this.page.waitForNetworkIdle({ idleTime: 1000, timeout: 10000 });
+      await this.page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 });
     } catch (error) {
       logger.debug('Network idle timeout, continuing...');
     }
     
     // Additional wait to ensure page is fully loaded
-    await this.randomDelay(1000, 2000);
+    await this.randomDelay(500, 1000);
   }
 
   // Wait for login verification to complete
@@ -136,15 +136,15 @@ export class BaseAutomation {
       logger.debug('Loading indicator wait timeout, continuing...');
     }
     
-    // Wait for network to be completely idle
+    // Wait for network to be completely idle with shorter timeout
     try {
-      await this.page.waitForNetworkIdle({ idleTime: 2000, timeout: 15000 });
+      await this.page.waitForNetworkIdle({ idleTime: 1000, timeout: 8000 });
     } catch (error) {
       logger.debug('Network idle timeout, continuing...');
     }
     
     // Additional wait for any redirects to complete
-    await this.randomDelay(2000, 4000);
+    await this.randomDelay(1000, 2000);
   }
 
   // Element interaction utilities

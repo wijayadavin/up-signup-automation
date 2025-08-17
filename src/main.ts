@@ -402,6 +402,20 @@ const processUsersCmd = command({
       description: 'Test upload mode: only run until Step 4 (Resume Import)',
       defaultValue: () => false,
     }),
+    noStealth: flag({
+      type: boolean,
+      long: 'no-stealth',
+      short: 's',
+      description: 'Disable stealth mode for debugging (use normal browser behavior)',
+      defaultValue: () => false,
+    }),
+    restoreSession: flag({
+      type: boolean,
+      long: 'restore-session',
+      short: 'r',
+      description: 'Restore existing session instead of starting from login',
+      defaultValue: () => false,
+    }),
   },
   handler: async (args) => {
     try {
@@ -412,7 +426,8 @@ const processUsersCmd = command({
       
       // Initialize services
       const browserManager = new BrowserManager({ 
-        headless: args.headless
+        headless: args.headless,
+        disableTrackingProtection: args.noStealth // Enable normal browser behavior when no-stealth is used
       });
       const userService = new UserService();
       const upworkService = new UpworkService(browserManager, userService);
@@ -420,9 +435,26 @@ const processUsersCmd = command({
       // Process users
       if (args.upload) {
         logger.info('Upload mode enabled: will stop after Step 4 (Resume Import)');
-        await upworkService.processPendingUsers(args.limit, { uploadOnly: true });
+        if (args.noStealth) {
+          logger.info('No-stealth mode enabled: using normal browser behavior for debugging');
+        }
+        if (args.restoreSession) {
+          logger.info('Restore-session mode enabled: will reuse existing sessions');
+        }
+        await upworkService.processPendingUsers(args.limit, { 
+          uploadOnly: true,
+          restoreSession: args.restoreSession
+        });
       } else {
-        await upworkService.processPendingUsers(args.limit);
+        if (args.noStealth) {
+          logger.info('No-stealth mode enabled: using normal browser behavior for debugging');
+        }
+        if (args.restoreSession) {
+          logger.info('Restore-session mode enabled: will reuse existing sessions');
+        }
+        await upworkService.processPendingUsers(args.limit, {
+          restoreSession: args.restoreSession
+        });
       }
       
       // Get stats

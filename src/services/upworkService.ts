@@ -229,7 +229,7 @@ export class UpworkService {
     }
   }
 
-  async processUser(user: User, options?: { uploadOnly?: boolean }): Promise<{
+  async processUser(user: User, options?: { uploadOnly?: boolean; restoreSession?: boolean }): Promise<{
     success: boolean;
     errorCode?: string;
     errorMessage?: string;
@@ -375,7 +375,7 @@ export class UpworkService {
     }
   }
 
-  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean }): Promise<void> {
+  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean }): Promise<void> {
     try {
       const users = await this.userService.getPendingUsers(limit);
       

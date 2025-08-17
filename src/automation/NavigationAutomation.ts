@@ -63,7 +63,7 @@ export class NavigationAutomation extends BaseAutomation {
   async navigateToUrl(url: string, stepName: string): Promise<AutomationResult> {
     try {
       logger.info(`Navigating to ${url} for ${stepName} step`);
-      await this.page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
       
       await this.waitForPageReady();
       

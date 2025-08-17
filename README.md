@@ -50,6 +50,7 @@ CREATE TABLE users (
 - Node.js 18+ 
 - PostgreSQL database
 - Chrome/Chromium browser
+- **Google Chrome** (for headful mode with `--headful` flag)
 
 ## Installation
 
@@ -89,6 +90,17 @@ CREATE DATABASE up_crawler;
 npm run migrate
 ```
 
+6. (Optional) Install Google Chrome for headful mode:
+```bash
+# For Ubuntu/Debian systems
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+sudo apt update
+sudo apt install google-chrome-stable -y
+
+# For other systems, download from https://www.google.com/chrome/
+```
+
 ## Usage
 
 ### Run docker compose
@@ -113,9 +125,14 @@ The application provides several commands for different operations:
   - `--keep-open`: Keep browser open indefinitely
 - **`add-user`**: Add individual users to the database
 - **`process-users`**: Run complete login automation for pending users
+  - `--upload`: Test resume upload (Step 1-4 only)
+  - `--no-stealth`: Disable stealth mode for debugging (use normal browser behavior)
+  - `--restore-session`: Restore existing session instead of starting from login
 - **`stats`**: View application statistics and user status
 - **`test-proxy`**: Test proxy configuration and verify IP details
 - **`import-csv`**: Bulk import users from CSV/TSV files
+- **`restore-session`**: Restore user session and open location page for manual completion
+  - `--headful`: Run browser in headful mode using system Chrome for natural browsing
 
 ### Command Syntax
 
@@ -128,7 +145,10 @@ npm start <command> -- <flags>
 # Examples:
 npm start visit-login -- --debug --headless
 npm start process-users -- --limit 5 --headless
+npm start process-users -- --upload --no-stealth
+npm start process-users -- --restore-session --limit 1
 npm start test-proxy -- --headless
+npm start restore-session -- --user-id 1 --headful
 
 # Incorrect syntax (flags won't be recognized):
 npm start visit-login --debug --headless  # ❌ Wrong
@@ -139,6 +159,9 @@ npm start visit-login --debug --headless  # ❌ Wrong
 # Direct execution (no npm start needed):
 node dist/main.js visit-login --debug --headless
 node dist/main.js process-users --limit 5 --headless
+node dist/main.js process-users --upload --no-stealth
+node dist/main.js process-users --restore-session --limit 1
+node dist/main.js restore-session --user-id 1 --headful
 ```
 
 ### Visit Login Page
@@ -219,6 +242,9 @@ npm start process-users -- --upload
 
 # Test resume upload in headless mode
 npm start process-users -- --upload --headless
+
+# Test resume upload with no-stealth mode for debugging
+npm start process-users -- --upload --no-stealth
 ```
 
 The automation includes:
@@ -228,6 +254,21 @@ The automation includes:
 - **Error Detection**: MFA, CAPTCHA, suspicious login, invalid credentials
 - **Screenshots**: Captured at each major step for debugging
 - **Human-like Behavior**: Random delays, realistic typing patterns
+
+**No-Stealth Mode (`--no-stealth`)**:
+- **Purpose**: Disable stealth mode for debugging and troubleshooting
+- **Browser Behavior**: Uses normal browser settings without anti-detection measures
+- **Use Cases**: Debug automation issues, test without stealth interference
+- **When to Use**: When automation fails and you need to see normal browser behavior
+- **Combination**: Can be used with `--upload` flag for focused debugging
+
+**Restore-Session Mode (`--restore-session`)**:
+- **Purpose**: Reuse existing saved sessions instead of performing fresh login
+- **Session Management**: Automatically restores cookies, localStorage, and browser state
+- **Use Cases**: Continue automation from where it left off, avoid repeated logins
+- **When to Use**: When users have existing sessions saved from previous runs
+- **Fallback**: If session restoration fails, automatically falls back to normal login flow
+- **Benefits**: Faster execution, reduced login attempts, better success rates
 
 ## Crawl Steps & Automation Workflow
 
@@ -569,6 +610,44 @@ Check the current status:
 ```bash
 npm start stats
 ```
+
+### Restore Session and Open Location Page
+Restore a user's saved session and open the Upwork location page for manual completion:
+
+```bash
+# Restore session in headless mode (default)
+npm start restore-session -- --user-id 1
+
+# Restore session in headful mode using system Chrome
+npm start restore-session -- --user-id 1 --headful
+```
+
+This command will:
+- **Load Session State**: Restore cookies, localStorage, and browser metadata from database
+- **Apply Proxy Settings**: Use the user's sticky proxy port (10001+)
+- **Launch Browser**: Open Chrome in headful mode (when using `--headful`)
+- **Navigate to Location Page**: Automatically go to Upwork's location step
+- **Keep Browser Open**: Browser remains open for manual completion
+- **Session Persistence**: All session data is preserved for seamless continuation
+
+**Headful Mode Features:**
+- **System Chrome**: Uses the actual Chrome browser installed on your system
+- **Natural Browsing**: Behaves exactly like a regular Chrome browser
+- **Full Functionality**: All buttons, JavaScript, and interactions work normally
+- **No Automation Detection**: Appears as a normal user browsing session
+- **Session Continuity**: Maintains login state and proxy configuration
+
+**Use Cases:**
+- Complete location step manually after automated profile creation
+- Handle phone verification or other manual steps
+- Debug profile creation issues with full browser access
+- Continue automation from where it left off
+
+**Example Workflow:**
+1. Run automated profile creation: `npm start process-users -- --limit 1`
+2. When automation stops at location step, restore session: `npm start restore-session -- --user-id 1 --headful`
+3. Complete location details manually in the opened browser
+4. Press Ctrl+C to close when finished
 
 ### Test Proxy Configuration
 Test your proxy configuration and verify IP details:

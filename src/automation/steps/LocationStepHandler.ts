@@ -68,7 +68,15 @@ export class LocationStepHandler extends StepHandler {
 
       if (nextButton) {
         await this.clickElement(nextButton);
-        logger.info('Location step completed successfully');
+        logger.info('Next button clicked, waiting for phone verification modal...');
+        
+        // Wait for phone verification modal to appear
+        const phoneVerificationResult = await this.handlePhoneVerificationModal();
+        if (phoneVerificationResult.status !== 'success') {
+          return phoneVerificationResult;
+        }
+        
+        logger.info('Location step completed successfully with phone verification');
         return this.createSuccess();
       } else {
         logger.warn('Could not find next button on location step');
@@ -140,17 +148,29 @@ export class LocationStepHandler extends StepHandler {
         aptSuite: '' // Optional field
       };
 
-      // Fill street address
+      // Fill street address with autocomplete handling
       const streetField = await this.waitForSelectorWithRetry([
         'input[placeholder="Enter street address"]',
         '[data-qa="input-address"] input',
-        '.air3-typeahead-input-fake[placeholder*="street"]'
+        '.air3-typeahead-input-main[placeholder*="street"]',
+        '.air3-typeahead-input-fake[placeholder*="street"]',
+        'input[role="combobox"][placeholder*="street"]'
       ], 5000);
 
       if (streetField) {
         logger.info(`Filling street address: ${addressData.street}`);
         await this.clearAndType(streetField, addressData.street);
-        await this.handleAutocompleteDropdown('street address');
+        
+        // Pause a little bit after typing street address
+        await this.randomDelay(2000, 3000);
+        
+        // Press down arrow and enter for autocomplete
+        await this.page.keyboard.press('ArrowDown');
+        await this.randomDelay(500, 1000);
+        await this.page.keyboard.press('Enter');
+        await this.randomDelay(1000, 2000);
+        
+        logger.info('Street address autocomplete selection completed');
       }
 
       // Fill apt/suite (optional)
@@ -164,20 +184,38 @@ export class LocationStepHandler extends StepHandler {
         await this.clearAndType(aptField, addressData.aptSuite);
       }
 
-      // Fill city
+      // Fill city with improved autocomplete handling (check if already filled)
       const cityField = await this.waitForSelectorWithRetry([
         'input[placeholder="Enter city"]',
         '[data-qa="input-city"] input',
-        '[aria-labelledby*="city"] input'
+        '[aria-labelledby*="city"] input',
+        '.air3-typeahead-input-fake[placeholder*="city"]'
       ], 5000);
 
       if (cityField) {
-        logger.info(`Filling city: ${addressData.city}`);
-        await this.clearAndType(cityField, addressData.city);
-        await this.handleAutocompleteDropdown('city');
+        // Check if city field already has a value (might be autofilled from street address)
+        const currentCityValue = await cityField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        
+        if (currentCityValue && currentCityValue.trim() !== '') {
+          logger.info(`City field already filled with: ${currentCityValue}, skipping city input`);
+        } else {
+          logger.info(`Filling city: ${addressData.city}`);
+          await this.clearAndType(cityField, addressData.city);
+          
+          // Pause a little bit after typing city
+          await this.randomDelay(2000, 3000);
+          
+          // Press down arrow and enter for autocomplete
+          await this.page.keyboard.press('ArrowDown');
+          await this.randomDelay(500, 1000);
+          await this.page.keyboard.press('Enter');
+          await this.randomDelay(1000, 2000);
+          
+          logger.info('City autocomplete selection completed');
+        }
       }
 
-      // Fill state/province
+      // Check if state is already filled before trying to fill it
       const stateField = await this.waitForSelectorWithRetry([
         'input[placeholder*="state"]',
         '[data-qa="address-state-input"]',
@@ -185,8 +223,15 @@ export class LocationStepHandler extends StepHandler {
       ], 5000);
 
       if (stateField) {
-        logger.info(`Filling state: ${addressData.state}`);
-        await this.clearAndType(stateField, addressData.state);
+        // Check if state field already has a value
+        const currentStateValue = await stateField.evaluate((el: Element) => (el as HTMLInputElement).value);
+        
+        if (currentStateValue && currentStateValue.trim() !== '') {
+          logger.info(`State field already filled with: ${currentStateValue}, skipping state input`);
+        } else {
+          logger.info(`Filling state: ${addressData.state}`);
+          await this.clearAndType(stateField, addressData.state);
+        }
       }
 
       // Fill ZIP/postal code
@@ -216,14 +261,16 @@ export class LocationStepHandler extends StepHandler {
     
     // Check if dropdown is visible - look for address-specific dropdowns
     const dropdownVisible = await this.page.evaluate(() => {
-      // Look for various types of dropdowns
+      // Look for various types of dropdowns based on the HTML structure
       const dropdownSelectors = [
-        '.air3-typeahead-dropdown',
-        '.air3-dropdown-menu', 
+        '.air3-typeahead-dropdown-menu',
+        '.air3-typeahead-menu-list-container',
+        '.air3-menu-list',
         '[role="listbox"]',
         '.air3-typeahead-fake + div', // Address suggestions dropdown
         '[data-qa="input-address"] + div', // Address input dropdown
-        '.air3-typeahead-suggestions'
+        '.air3-typeahead-suggestions',
+        '.air3-typeahead-dropdown'
       ];
       
       return dropdownSelectors.some(selector => {
@@ -239,11 +286,25 @@ export class LocationStepHandler extends StepHandler {
       logger.info(`${fieldName} dropdown visible, selecting first option...`);
       // Wait a bit more for dropdown to fully load
       await this.randomDelay(1000, 1500);
-      // Press down arrow to select first option
-      await this.page.keyboard.press('ArrowDown');
-      await this.randomDelay(1000, 1500); // Wait longer before pressing enter
-      // Press enter to confirm selection
-      await this.page.keyboard.press('Enter');
+      
+      // Try to click the first option directly first
+      const firstOptionClicked = await this.page.evaluate(() => {
+        const menuItems = document.querySelectorAll('.air3-menu-item');
+        if (menuItems.length > 0) {
+          const firstItem = menuItems[0] as HTMLElement;
+          firstItem.click();
+          return true;
+        }
+        return false;
+      });
+      
+      if (!firstOptionClicked) {
+        // Fallback to keyboard navigation
+        await this.page.keyboard.press('ArrowDown');
+        await this.randomDelay(1000, 1500);
+        await this.page.keyboard.press('Enter');
+      }
+      
       await this.randomDelay(1000, 1500); // Wait longer after selection
       logger.info(`${fieldName} selection completed`);
     } else {
@@ -381,7 +442,7 @@ export class LocationStepHandler extends StepHandler {
     
     // Wait for network idle
     try {
-      await this.page.waitForNetworkIdle({ idleTime: 2000, timeout: 10000 });
+      await this.page.waitForNetworkIdle({ idleTime: 1000, timeout: 5000 });
     } catch (error) {
       logger.debug('Network idle timeout, continuing...');
     }
@@ -433,6 +494,191 @@ export class LocationStepHandler extends StepHandler {
 
     } catch (error) {
       return this.createError('PHONE_FILL_FAILED', `Failed to fill phone number: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async handlePhoneVerificationModal(): Promise<AutomationResult> {
+    try {
+      logger.info('Waiting for phone verification modal...');
+      
+      // Wait for the phone verification modal to appear with multiple attempts
+      let modalElement = null;
+      let attempts = 0;
+      const maxAttempts = 3;
+      
+      while (!modalElement && attempts < maxAttempts) {
+        attempts++;
+        logger.info(`Attempt ${attempts}/${maxAttempts} to find phone verification modal...`);
+        
+        // Wait for the phone verification modal to appear
+        modalElement = await this.waitForSelectorWithRetry([
+          'h3:contains("Please verify your phone number")',
+          'h3.mb-0:contains("verify your phone number")',
+          '.air3-grid-container h3:contains("verify")',
+          '[data-ev-label="submit_phone"]', // Send code button
+          'button#submitPhone'
+        ], 10000); // Wait up to 10 seconds for modal
+
+        if (!modalElement && attempts < maxAttempts) {
+          logger.warn(`Phone verification modal not found on attempt ${attempts}, waiting and trying again...`);
+          await this.randomDelay(3000, 5000);
+          
+          // Try clicking the Next button again if modal didn't appear
+          const nextButton = await this.waitForSelectorWithRetry([
+            '[data-test="next-button"]',
+            'button:contains("Next")',
+            '.air3-btn-primary:contains("Next")'
+          ], 5000);
+          
+          if (nextButton) {
+            logger.info('Clicking Next button again to trigger phone verification modal...');
+            await this.clickElement(nextButton);
+            await this.randomDelay(2000, 3000);
+          }
+        }
+      }
+
+      if (!modalElement) {
+        logger.error('Phone verification modal not found after all attempts');
+        return this.createError('PHONE_VERIFICATION_MODAL_NOT_FOUND', 'Phone verification modal not found after multiple attempts');
+      }
+
+      logger.info('Phone verification modal detected');
+
+      // Look for the "Send code" button
+      const sendCodeButton = await this.waitForSelectorWithRetry([
+        'button#submitPhone',
+        '[data-ev-label="submit_phone"]',
+        'button:contains("Send code")',
+        '.air3-btn-primary:contains("Send code")'
+      ], 5000);
+
+      if (!sendCodeButton) {
+        logger.warn('Send code button not found in phone verification modal');
+        return this.createError('SEND_CODE_BUTTON_NOT_FOUND', 'Could not find Send code button in phone verification modal');
+      }
+
+      logger.info('Clicking Send code button...');
+      await this.clickElement(sendCodeButton);
+      
+      // Wait for the button to be processed
+      await this.randomDelay(2000, 3000);
+      
+      logger.info('Send code button clicked successfully');
+      
+      // Now wait for the OTP input modal to appear (10 seconds as requested)
+      logger.info('Waiting for OTP input modal to appear (10 seconds)...');
+      await this.randomDelay(10000, 10000);
+      
+      // Check for the OTP input modal
+      const otpModalTitle = await this.page.evaluate(() => {
+        const h3Elements = document.querySelectorAll('h3');
+        return Array.from(h3Elements).find(h3 => h3.textContent?.includes('Enter your code'));
+      });
+      
+      if (!otpModalTitle) {
+        logger.warn('OTP input modal not found after 10 second wait');
+        return this.createError('OTP_MODAL_NOT_FOUND', 'OTP input modal not found after 10 second wait');
+      }
+      
+      logger.info('OTP input modal detected, handling OTP input...');
+      
+      // Wait a bit more for the OTP modal to be fully loaded
+      await this.randomDelay(2000, 3000);
+      
+      // Find the first OTP input field
+      const firstOtpInput = await this.page.$('.pincode-input');
+      if (!firstOtpInput) {
+        logger.warn('OTP input field not found');
+        return this.createError('OTP_FIELDS_NOT_FOUND', 'OTP input field not found');
+      }
+      
+      logger.info('Found OTP input field, typing test code 12345...');
+      
+      // Focus the first field and type all 5 digits
+      await firstOtpInput.focus();
+      await this.randomDelay(500, 1000);
+      await firstOtpInput.type('12345');
+      await this.randomDelay(1000, 1500);
+      
+      await this.randomDelay(1000, 1500);
+      
+      // Click the verify button
+      const verifyButton = await this.waitForSelectorWithRetry([
+        'button#checkPin',
+        'button[data-ev-label="check_pin"]',
+        'button:contains("Verify phone number")',
+        '.air3-btn-primary:contains("Verify")'
+      ], 5000);
+      
+      if (!verifyButton) {
+        logger.warn('Verify button not found');
+        return this.createError('VERIFY_BUTTON_NOT_FOUND', 'Verify button not found');
+      }
+      
+      logger.info('Clicking verify phone number button...');
+      await this.clickElement(verifyButton);
+      
+      // Wait for verification result (10 seconds as requested)
+      logger.info('Waiting 10 seconds for verification result...');
+      await this.randomDelay(10000, 10000);
+      
+      // Check for error messages with more robust detection
+      const errorMessages = await this.page.$$('.air3-form-message-error, .air3-form-message.air3-form-message-error, .error-message');
+      if (errorMessages.length > 0) {
+        // Check each error message for content
+        for (const errorElement of errorMessages) {
+          const errorText = await errorElement.evaluate((el: Element) => el.textContent);
+          if (errorText && errorText.trim()) {
+            logger.warn(`Phone verification error detected: ${errorText}`);
+            
+            // Check for specific error types
+            if (errorText.toLowerCase().includes('expired')) {
+              logger.warn('OTP code expired, verification failed');
+              return this.createError('OTP_EXPIRED', 'OTP code expired, verification failed');
+            }
+            
+            if (errorText.toLowerCase().includes('invalid') || errorText.toLowerCase().includes('incorrect')) {
+              logger.warn('OTP code invalid/incorrect, verification failed');
+              return this.createError('OTP_INVALID', 'OTP code invalid/incorrect, verification failed');
+            }
+            
+            if (errorText.toLowerCase().includes('try again') || errorText.toLowerCase().includes('request a new one')) {
+              logger.warn('OTP verification failed, need to try again');
+              return this.createError('OTP_VERIFICATION_FAILED', `OTP verification failed: ${errorText}`);
+            }
+            
+            // Generic error handling
+            return this.createError('PHONE_VERIFICATION_FAILED', `Phone verification failed: ${errorText}`);
+          }
+        }
+      }
+      
+      // Additional check for error state in OTP input fields
+      const otpInputsWithError = await this.page.$$('.pincode-input.has-error, .pincode-input[aria-invalid="true"]');
+      if (otpInputsWithError.length > 0) {
+        logger.warn('OTP input fields show error state, verification likely failed');
+        return this.createError('OTP_INPUT_ERROR', 'OTP input fields show error state, verification failed');
+      }
+      
+      // Wait for modal to close after successful verification
+      await this.randomDelay(2000, 3000);
+      
+      // Check if modal is still present
+      const modalStillPresent = await this.page.evaluate(() => {
+        const h3Elements = document.querySelectorAll('h3');
+        return Array.from(h3Elements).find(h3 => h3.textContent?.includes('Enter your code'));
+      });
+      if (modalStillPresent) {
+        logger.warn('Phone verification modal still present after verification');
+        return this.createError('VERIFICATION_MODAL_STILL_OPEN', 'Phone verification modal still open after verification');
+      }
+      
+      logger.info('Phone verification completed successfully');
+      return this.createSuccess();
+
+    } catch (error) {
+      return this.createError('PHONE_VERIFICATION_MODAL_FAILED', `Phone verification modal handling failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

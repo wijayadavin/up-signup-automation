@@ -6,7 +6,7 @@ import { NavigationAutomation } from './NavigationAutomation';
 import { SkillsStepHandler } from './steps/SkillsStepHandler';
 import { EducationStepHandler } from './steps/EducationStepHandler';
 import { OverviewStepHandler } from './steps/OverviewStepHandler';
-// import { LocationStepHandler } from './steps/LocationStepHandler'; // TODO: Re-enable when location step is fixed
+import { LocationStepHandler } from './steps/LocationStepHandler';
 import { SessionService } from '../services/sessionService.js';
 import { BrowserManager } from '../browser/browserManager.js';
 
@@ -45,17 +45,33 @@ export class LoginAutomation extends BaseAutomation {
       ['skills', new SkillsStepHandler(page, user)],
       ['education', new EducationStepHandler(page, user)],
       ['overview', new OverviewStepHandler(page, user)],
-      // ['location', new LocationStepHandler(page, user)], // TODO: Re-enable when location step is fixed
+      ['location', new LocationStepHandler(page, user)],
       // Add more step handlers as they are created
     ]);
   }
 
-  async execute(options?: { uploadOnly?: boolean }): Promise<LoginResult> {
+  async execute(options?: { uploadOnly?: boolean; restoreSession?: boolean }): Promise<LoginResult> {
     try {
       logger.info('Starting login automation...');
       
       // Setup browser
       await this.setupBrowser();
+      
+      // Check if we should restore session instead of logging in
+      if (options?.restoreSession) {
+        logger.info('Restore-session mode enabled, attempting to restore existing session...');
+        
+        // Try to restore session first
+        const sessionRestored = await this.restoreExistingSession();
+        if (sessionRestored) {
+          logger.info('Session restored successfully, proceeding to profile creation...');
+          // Handle profile creation with restored session
+          const result = await this.handleCreateProfile(options);
+          return this.convertToLegacyResult(result);
+        } else {
+          logger.info('Session restoration failed, falling back to normal login flow...');
+        }
+      }
       
       // Go to login page
       let result = await this.goToLoginPage();
@@ -96,6 +112,73 @@ export class LoginAutomation extends BaseAutomation {
     // Browser setup logic
     await this.page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
     await this.page.setViewport({ width: 1920, height: 1080 });
+  }
+
+  private async restoreExistingSession(): Promise<boolean> {
+    try {
+      logger.info('Attempting to restore existing session...');
+      
+      // Import SessionService dynamically
+      const { SessionService } = await import('../services/sessionService.js');
+      
+      // Check if user has saved session state
+      const db = await import('../database/connection.js').then(m => m.getDatabase());
+      const user = await db
+        .selectFrom('users')
+        .select(['last_session_state', 'onboarding_completed_at', 'last_proxy_port'])
+        .where('id', '=', this.user.id)
+        .executeTakeFirst();
+      
+      if (!user?.last_session_state) {
+        logger.info('No saved session state found for user');
+        return false;
+      }
+      
+      if (user.onboarding_completed_at) {
+        logger.info('User has already completed onboarding, skipping session restoration');
+        return false;
+      }
+      
+      logger.info('Found saved session state, attempting to restore...');
+      
+      // Restore session state using the same method as restore-session command
+      const sessionRestored = await SessionService.loadSessionState(this.page, this.user.id);
+      if (!sessionRestored) {
+        logger.warn('Failed to load session state');
+        return false;
+      }
+      
+      // Navigate to Upwork to check if session is still valid
+      logger.info('Navigating to Upwork to check session validity...');
+      await this.page.goto('https://www.upwork.com', {
+        waitUntil: 'networkidle2',
+        timeout: 30000,
+      });
+      
+      // Wait for page to load
+      await this.waitForPageReady();
+      
+      // Check if we're logged in by looking for profile creation page or dashboard
+      const currentUrl = this.page.url();
+      logger.info(`Current URL after navigation: ${currentUrl}`);
+      
+      const isLoggedIn = currentUrl.includes('/nx/create-profile') || 
+                        currentUrl.includes('/ab/account-security') ||
+                        currentUrl.includes('/dashboard') ||
+                        currentUrl.includes('/welcome');
+      
+      if (isLoggedIn) {
+        logger.info('Session restored successfully, user is logged in');
+        return true;
+      } else {
+        logger.info('Session restoration failed, user is not logged in');
+        return false;
+      }
+      
+    } catch (error) {
+      logger.error('Error during session restoration:', error);
+      return false;
+    }
   }
 
   private async goToLoginPage(): Promise<AutomationResult> {
@@ -249,25 +332,7 @@ export class LoginAutomation extends BaseAutomation {
           return stepResult;
         }
         
-        // Special handling for location step - skip for now and save session state
-        if (stepName === 'location') {
-          logger.info('Location step reached - SKIPPING FOR NOW (TODO: Fix location step)');
-          logger.info('Marking onboarding as completed and saving session state...');
-          
-          try {
-            // Mark onboarding as completed with proxy port
-            await SessionService.markOnboardingCompleted(this.user.id, 10001);
-            
-            // Save session state
-            await SessionService.saveSessionState(this.page, this.user.id);
-            
-            logger.info('Onboarding marked as completed and session state saved');
-            return this.createSuccess('done');
-          } catch (error) {
-            logger.error('Failed to mark onboarding as completed or save session state:', error);
-            return this.createError('SESSION_SAVE_FAILED', 'Failed to save session state');
-          }
-        }
+
       }
       
       return this.createSuccess('done');
@@ -313,25 +378,7 @@ export class LoginAutomation extends BaseAutomation {
       return await this.handleRateStep();
     }
     
-    // Special handling for location step - skip for now
-    if (stepName === 'location') {
-      logger.info('Location step reached in legacy handler - SKIPPING FOR NOW (TODO: Fix location step)');
-      logger.info('Marking onboarding as completed and saving session state...');
-      
-      try {
-        // Mark onboarding as completed with proxy port
-        await SessionService.markOnboardingCompleted(this.user.id, 10001);
-        
-        // Save session state
-        await SessionService.saveSessionState(this.page, this.user.id);
-        
-        logger.info('Onboarding marked as completed and session state saved');
-        return this.createSuccess('done');
-      } catch (error) {
-        logger.error('Failed to mark onboarding as completed or save session state:', error);
-        return this.createError('SESSION_SAVE_FAILED', 'Failed to save session state');
-      }
-    }
+
     
     // For now, just try to click next button
     return await this.navigationAutomation.clickNextButton(stepName);
@@ -644,6 +691,9 @@ export class LoginAutomation extends BaseAutomation {
       
       logger.info('OTP input modal detected, handling OTP input...');
       
+      // Wait a bit more for the OTP modal to be fully loaded
+      await this.randomDelay(2000, 3000);
+      
       // Find all OTP input fields
       const otpInputs = await this.page.$$('.pincode-input');
       if (otpInputs.length === 0) {
@@ -684,8 +734,9 @@ export class LoginAutomation extends BaseAutomation {
       logger.info('Clicking verify phone number button...');
       await this.clickElement(verifyButton);
       
-      // Wait for verification result
-      await this.randomDelay(3000, 5000);
+      // Wait for verification result (5-7 seconds as requested)
+      logger.info('Waiting 5-7 seconds for verification result...');
+      await this.randomDelay(5000, 7000);
       
       // Check for error messages
       const errorMessage = await this.page.$('.air3-form-message-error');

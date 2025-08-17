@@ -227,9 +227,9 @@ export class BrowserManager {
           this.browser = await puppeteer.launch(launchOptions);
         }
       } else {
-        // Use Chromium for automation/headless mode
+        // Use Chromium for automation/headless mode and restore-session
         launchOptions.ignoreDefaultArgs = ['--disable-extensions'];
-        logger.info('Using Chromium for headless/automation mode');
+        logger.info('Using Chromium for automation/headless mode');
         this.browser = await puppeteer.launch(launchOptions);
       }
 

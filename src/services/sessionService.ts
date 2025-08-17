@@ -126,19 +126,31 @@ export class SessionService {
         }
       }
       
-      // Set localStorage
-      for (const storageGroup of sessionState.storage) {
-        await page.goto(storageGroup.origin);
-        await page.evaluate((localStorageData) => {
-          for (const [key, value] of Object.entries(localStorageData)) {
-            window.localStorage.setItem(key, value);
-          }
-        }, storageGroup.localStorage);
-      }
-      
-      // Set user agent
+      // Set user agent first
       if (sessionState.meta.ua) {
         await page.setUserAgent(sessionState.meta.ua);
+      }
+      
+      // Set localStorage - navigate to each origin carefully
+      for (const storageGroup of sessionState.storage) {
+        try {
+          logger.info(`Setting localStorage for origin: ${storageGroup.origin}`);
+          await page.goto(storageGroup.origin, { 
+            waitUntil: 'domcontentloaded',
+            timeout: 15000 
+          });
+          
+          await page.evaluate((localStorageData) => {
+            for (const [key, value] of Object.entries(localStorageData)) {
+              window.localStorage.setItem(key, value);
+            }
+          }, storageGroup.localStorage);
+          
+          logger.info(`localStorage set for ${storageGroup.origin}`);
+        } catch (storageError) {
+          logger.warn(`Failed to set localStorage for ${storageGroup.origin}:`, storageError);
+          // Continue with other origins even if one fails
+        }
       }
       
       logger.info(`Session state loaded for user ${userId}`);
@@ -209,7 +221,7 @@ export class SessionService {
       // Create browser manager with specified mode and proxy
       const browserManager = new BrowserManager({ 
         headless: !headful, // Invert headful flag for headless setting
-        disableTrackingProtection: headful, // Enable tracking protection disabling in headful mode
+        disableTrackingProtection: false, // Always use Chromium for consistency
         proxy: {
           host: 'us.decodo.com',
           port: proxyPort,
@@ -223,14 +235,28 @@ export class SessionService {
       const page = await browser.newPage();
       
       // Restore session state
-      await this.loadSessionState(page, userId);
+      const sessionLoaded = await this.loadSessionState(page, userId);
+      if (!sessionLoaded) {
+        throw new Error(`Failed to load session state for user ${userId}`);
+      }
       
-      // Navigate to location page
+      // Navigate to location page with better error handling
       logger.info(`Navigating to location page for user ${user.first_name} ${user.last_name}`);
-      await page.goto('https://www.upwork.com/nx/create-profile/location', { 
-        waitUntil: 'networkidle2',
-        timeout: 30000 
-      });
+      try {
+        await page.goto('https://www.upwork.com/nx/create-profile/location', { 
+          waitUntil: 'domcontentloaded',
+          timeout: 30000 
+        });
+        logger.info('Successfully navigated to location page');
+      } catch (navigationError) {
+        logger.warn('Failed to navigate to location page, trying main Upwork page instead:', navigationError);
+        // Fallback to main Upwork page
+        await page.goto('https://www.upwork.com', { 
+          waitUntil: 'domcontentloaded',
+          timeout: 30000 
+        });
+        logger.info('Navigated to main Upwork page as fallback');
+      }
       
       logger.info(`Location page opened for user ${userId}. Browser will remain open.`);
       logger.info('Press Ctrl+C to close the browser when you are done.');
