@@ -417,16 +417,54 @@ export class LoginAutomation {
       await this.page.keyboard.press('Enter');
       await this.randomDelay(2000, 3000);
 
-      // Wait for navigation to complete
-      try {
-        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-      } catch (error) {
-        // Navigation timeout - check if we're already on the right page
-        logger.warn('Navigation timeout, checking current page');
+      // Wait for navigation to complete with retry logic
+      let currentUrl = '';
+      let redirectAttempts = 0;
+      const maxRedirectAttempts = 3;
+      
+      while (redirectAttempts < maxRedirectAttempts) {
+        try {
+          logger.info(`Waiting for redirect after login (attempt ${redirectAttempts + 1}/${maxRedirectAttempts})`);
+          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (error) {
+          logger.warn(`Navigation timeout on attempt ${redirectAttempts + 1}, checking current page`);
+        }
+
+        // Check current URL after each attempt
+        currentUrl = this.page.url();
+        logger.info(`Current URL after attempt ${redirectAttempts + 1}: ${currentUrl}`);
+        
+        // If we're on create profile page, we're done
+        if (currentUrl.includes('/nx/create-profile')) {
+          this.screenshots.after_login = await this.takeScreenshot('after_login');
+          logger.info('Successfully logged in, reached create profile page');
+          return {
+            status: 'success',
+            stage: 'create_profile',
+            screenshots: this.screenshots,
+            url: currentUrl,
+          };
+        }
+        
+        // If we're still on login page, wait a bit more and try again
+        if (currentUrl.includes('/ab/account-security/login')) {
+          redirectAttempts++;
+          if (redirectAttempts < maxRedirectAttempts) {
+            logger.info(`Still on login page, waiting 5 seconds before retry ${redirectAttempts + 1}`);
+            await this.randomDelay(5000, 7000);
+          }
+        } else {
+          // We're on some other page, break out of retry loop
+          break;
+        }
       }
 
-      // Check if we reached create profile page first
-      const currentUrl = this.page.url();
+      // If we've exhausted all retry attempts and still on login page
+      if (currentUrl.includes('/ab/account-security/login')) {
+        logger.warn(`Failed to redirect after ${maxRedirectAttempts} attempts, still on login page`);
+      }
+
+      // Check if we reached create profile page
       if (currentUrl.includes('/nx/create-profile')) {
         this.screenshots.after_login = await this.takeScreenshot('after_login');
         logger.info('Successfully logged in, reached create profile page');
@@ -455,7 +493,7 @@ export class LoginAutomation {
         error_code: 'UNEXPECTED_PAGE',
         screenshots: this.screenshots,
         url: currentUrl,
-        evidence: `Expected create profile page, got ${currentUrl}`,
+        evidence: `Expected create profile page after ${maxRedirectAttempts} redirect attempts, got ${currentUrl}`,
       };
 
     } catch (error) {
