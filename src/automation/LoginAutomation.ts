@@ -122,9 +122,9 @@ export class LoginAutomation extends BaseAutomation {
         logger.info(`Forcing navigation to step: ${options.step}`);
         await this.page.goto(`https://www.upwork.com/nx/create-profile/${options.step}`, {
           waitUntil: 'networkidle2',
-          timeout: 30000,
+          timeout: 10000,
         });
-        await this.randomDelay(3000, 5000);
+        await this.randomDelay(1000, 1700);
         
         // Verify we reached the correct step
         const currentUrl = this.page.url();
@@ -355,7 +355,7 @@ export class LoginAutomation extends BaseAutomation {
       
       if (attempt < 3) {
         logger.info(`No error detected on attempt ${attempt}, waiting before retry...`);
-        await this.randomDelay(1000, 2000);
+        await this.randomDelay(300, 700);
       }
     }
     if (errorDetected) {
@@ -386,7 +386,7 @@ export class LoginAutomation extends BaseAutomation {
     if (!currentUrl.includes('/nx/create-profile')) {
       // Wait a bit more and check again in case redirect is still in progress
       logger.info('Not on create profile page yet, waiting a bit more...');
-      await this.randomDelay(3000, 5000);
+      await this.randomDelay(1000, 1700);
       await this.waitForPageReady();
       
       const retryUrl = this.page.url();
@@ -423,22 +423,89 @@ export class LoginAutomation extends BaseAutomation {
         logger.info(`Forcing navigation to step: ${options.step}`);
         const stepUrl = `https://www.upwork.com/nx/create-profile/${options.step}`;
         
-        await this.page.goto(stepUrl, {
-          waitUntil: 'networkidle2',
-          timeout: 30000,
-        });
-        await this.randomDelay(3000, 5000);
-        
-        // Verify we reached the correct step
-        const currentUrl = this.page.url();
-        if (!currentUrl.includes(`/nx/create-profile/${options.step}`)) {
+        // Navigate to the step with retries
+        let navigationSuccess = false;
+        let attempts = 0;
+        const maxAttempts = 2;
+
+        while (attempts < maxAttempts) {
+          attempts++;
+          logger.info(`Navigation attempt ${attempts}/${maxAttempts} to ${options.step} step...`);
+
+          try {
+            await this.page.goto(stepUrl, {
+              waitUntil: 'networkidle2',
+              timeout: 20000,
+            });
+            await this.randomDelay(1000, 1700);
+
+            // Wait for URL to update
+            await this.waitForPageTransition();
+            
+            // Verify we reached the correct step
+            const currentUrl = this.page.url();
+            logger.info(`Current URL after navigation: ${currentUrl}`);
+
+            if (currentUrl.includes(`/nx/create-profile/${options.step}`)) {
+              navigationSuccess = true;
+              logger.info(`Successfully navigated to ${options.step} step`);
+              
+              // Wait for page content with specific education page elements
+              await this.waitForPageReady();
+              
+              // Wait for the Add Education button specifically
+              const addButton = await this.waitForSelectorWithRetry([
+                'button[data-qa="education-add-btn"][data-ev-label="education_add_btn"]',
+                'button[data-qa="education-add-btn"]',
+                '#add-education-label',
+                '.carousel-list-add-new'
+              ], 20000);
+
+              if (addButton) {
+                logger.info('Add Education button found - page content ready');
+                navigationSuccess = true;
+                break;
+              } else {
+                logger.warn('Add Education button not found, trying page refresh...');
+                
+                // Force refresh the page
+                await this.page.reload({ waitUntil: 'networkidle2', timeout: 20000 });
+                await this.randomDelay(2000, 3000);
+                
+                // Check again after refresh
+                const addButtonAfterRefresh = await this.waitForSelectorWithRetry([
+                  'button[data-qa="education-add-btn"][data-ev-label="education_add_btn"]',
+                  'button[data-qa="education-add-btn"]',
+                  '#add-education-label',
+                  '.carousel-list-add-new'
+                ], 20000);
+                
+                if (addButtonAfterRefresh) {
+                  logger.info('Add Education button found after refresh');
+                  navigationSuccess = true;
+                  break;
+                } else {
+                  logger.warn('Add Education button still not found after refresh');
+                  await this.randomDelay(4000, 6000);
+                  continue;
+                }
+              }
+            }
+
+            logger.warn(`Navigation attempt ${attempts} failed, URL is ${currentUrl}`);
+            await this.randomDelay(4000, 6000);
+          } catch (error) {
+            logger.warn(`Navigation attempt ${attempts} failed with error:`, error);
+            await this.randomDelay(4000, 6000);
+          }
+        }
+
+        if (!navigationSuccess) {
           return this.createError(
             'FORCED_STEP_NAVIGATION_FAILED',
-            `Failed to navigate to ${options.step} step, current URL: ${currentUrl}`
+            `Failed to navigate to ${options.step} step after ${maxAttempts} attempts`
           );
         }
-        
-        logger.info(`Successfully navigated to ${options.step} step`);
       }
       
       const currentUrl = this.page.url();
@@ -771,7 +838,7 @@ export class LoginAutomation extends BaseAutomation {
           }
           
           if (attempt < 3) {
-            await this.randomDelay(1000, 2000);
+            await this.randomDelay(300, 700);
           }
         }
         
@@ -791,7 +858,7 @@ export class LoginAutomation extends BaseAutomation {
             } catch (error) {
               logger.info(`Modal appearance attempt ${attempt}/3 failed, retrying...`);
               if (attempt < 3) {
-                await this.randomDelay(2000, 3000);
+                await this.randomDelay(4000, 6000);
               }
             }
           }
@@ -962,7 +1029,7 @@ export class LoginAutomation extends BaseAutomation {
             }
             
             if (attempt < 3) {
-              await this.randomDelay(2000, 3000);
+              await this.randomDelay(4000, 6000);
             }
           }
         }
@@ -1091,7 +1158,7 @@ export class LoginAutomation extends BaseAutomation {
       if (!isChecked) {
         logger.warn('Radio button not checked after clicking, trying again...');
         await this.clickElement(radioButton);
-        await this.randomDelay(1000, 2000);
+        await this.randomDelay(300, 700);
         
         const retryChecked = await radioButton.evaluate((el: Element) => (el as HTMLInputElement).checked);
         if (!retryChecked) {
@@ -1176,7 +1243,7 @@ export class LoginAutomation extends BaseAutomation {
         } else {
           logger.warn(`Navigation failed on attempt ${attempts}. Current URL: ${newUrl}`);
           if (attempts < maxAttempts) {
-            await this.randomDelay(2000, 3000);
+            await this.randomDelay(4000, 6000);
           }
         }
       } else {
@@ -1203,13 +1270,13 @@ export class LoginAutomation extends BaseAutomation {
           } else {
             logger.warn(`Tab+enter navigation failed on attempt ${attempts}. Current URL: ${newUrl}`);
             if (attempts < maxAttempts) {
-              await this.randomDelay(2000, 3000);
+              await this.randomDelay(4000, 6000);
             }
           }
         } catch (tabError) {
           logger.warn(`Tab+enter method failed: ${tabError instanceof Error ? tabError.message : 'Unknown error'}`);
           if (attempts < maxAttempts) {
-            await this.randomDelay(2000, 3000);
+            await this.randomDelay(4000, 6000);
           }
         }
       }
@@ -1422,7 +1489,7 @@ export class LoginAutomation extends BaseAutomation {
         }
         
         // Wait a bit more for the button to be fully interactive
-        await this.randomDelay(1000, 2000);
+        await this.randomDelay(300, 700);
         
         // Click the "Send code" button with more specific selector
         const sendCodeButton = await this.waitForSelectorWithRetry([
@@ -1459,7 +1526,7 @@ export class LoginAutomation extends BaseAutomation {
         
         // Wait for the OTP input modal to appear
         logger.info('Waiting for OTP input modal to appear...');
-        await this.randomDelay(3000, 5000);
+        await this.randomDelay(1000, 1700);
         
         // Check if OTP modal appeared after first click
         let otpModalAppeared = await this.page.evaluate(() => {
@@ -1483,7 +1550,7 @@ export class LoginAutomation extends BaseAutomation {
           if (sendCodeButtonRetry) {
             logger.info('Clicking send code button again as fallback...');
             await this.clickElement(sendCodeButtonRetry);
-            await this.randomDelay(3000, 5000);
+            await this.randomDelay(1000, 1700);
             
             // Check again if OTP modal appeared
             otpModalAppeared = await this.page.evaluate(() => {

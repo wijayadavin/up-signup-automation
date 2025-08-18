@@ -430,11 +430,11 @@ export class EmploymentStepHandler extends StepHandler {
 
       // Wait for modal to fully close with retries
       let modalClosed = false;
-      let attempts = 0;
-      const maxAttempts = 5;
+      let closeAttempts = 0;
+      const maxCloseAttempts = 5;
 
-      while (attempts < maxAttempts) {
-        logger.info(`Attempt ${attempts + 1}/${maxAttempts} to verify modal closed...`);
+      while (closeAttempts < maxCloseAttempts) {
+        logger.info(`Attempt ${closeAttempts + 1}/${maxCloseAttempts} to verify modal closed...`);
         const modalStillOpen = await this.page.$('[role="dialog"], [data-qa="employment-dialog-body"]');
         
         if (!modalStillOpen) {
@@ -445,7 +445,7 @@ export class EmploymentStepHandler extends StepHandler {
         
         logger.info('Modal still open, waiting...');
         await this.randomDelay(1000, 1500);
-        attempts++;
+        closeAttempts++;
       }
 
       if (!modalClosed) {

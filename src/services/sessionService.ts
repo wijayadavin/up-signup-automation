@@ -137,7 +137,7 @@ export class SessionService {
           logger.info(`Setting localStorage for origin: ${storageGroup.origin}`);
           await page.goto(storageGroup.origin, { 
             waitUntil: 'domcontentloaded',
-            timeout: 15000 
+            timeout: 5000
           });
           
           await page.evaluate((localStorageData) => {
@@ -244,16 +244,16 @@ export class SessionService {
       logger.info(`Navigating to location page for user ${user.first_name} ${user.last_name}`);
       try {
         await page.goto('https://www.upwork.com/nx/create-profile/location', { 
-          waitUntil: 'domcontentloaded',
-          timeout: 30000 
+                      waitUntil: 'domcontentloaded',
+            timeout: 10000 // 3x faster timeout 
         });
         logger.info('Successfully navigated to location page');
       } catch (navigationError) {
         logger.warn('Failed to navigate to location page, trying main Upwork page instead:', navigationError);
         // Fallback to main Upwork page
         await page.goto('https://www.upwork.com', { 
-          waitUntil: 'domcontentloaded',
-          timeout: 30000 
+                      waitUntil: 'domcontentloaded',
+            timeout: 10000 // 3x faster timeout 
         });
         logger.info('Navigated to main Upwork page as fallback');
       }

@@ -46,7 +46,7 @@ export class BaseAutomation {
   protected async waitForPageReady(): Promise<void> {
     try {
       // Use Puppeteer's networkidle wait with shorter timeout
-      await this.page.waitForNetworkIdle({ idleTime: 200, timeout: 5000 });
+      await this.page.waitForNetworkIdle({ idleTime: 100, timeout: 2000 });
     } catch (error) {
       // Fallback to timeout for compatibility
       await this.randomDelay(1000, 1500);
@@ -105,7 +105,7 @@ export class BaseAutomation {
     
     // Wait for network to be idle with shorter timeout
     try {
-      await this.page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 });
+      await this.page.waitForNetworkIdle({ idleTime: 200, timeout: 2000 });
     } catch (error) {
       logger.debug('Network idle timeout, continuing...');
     }
@@ -137,7 +137,7 @@ export class BaseAutomation {
     
     // Wait for network to be completely idle with shorter timeout
     try {
-      await this.page.waitForNetworkIdle({ idleTime: 1000, timeout: 8000 });
+      await this.page.waitForNetworkIdle({ idleTime: 300, timeout: 3000 });
     } catch (error) {
       logger.debug('Network idle timeout, continuing...');
     }
