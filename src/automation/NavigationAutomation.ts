@@ -63,7 +63,7 @@ export class NavigationAutomation extends BaseAutomation {
   async navigateToUrl(url: string, stepName: string): Promise<AutomationResult> {
     try {
       logger.info(`Navigating to ${url} for ${stepName} step`);
-      await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }); // Increased timeout to 60 seconds
       
       await this.waitForPageReady();
       
@@ -78,7 +78,7 @@ export class NavigationAutomation extends BaseAutomation {
   }
 
   // Wait for page to match URL pattern
-  async waitForUrlPattern(pattern: string, timeout: number = 15000): Promise<boolean> {
+  async waitForUrlPattern(pattern: string, timeout: number = 60000): Promise<boolean> { // Increased default timeout to 60 seconds
     const startTime = Date.now();
     
     while (Date.now() - startTime < timeout) {

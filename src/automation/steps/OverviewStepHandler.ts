@@ -14,7 +14,7 @@ export class OverviewStepHandler extends StepHandler {
     super(page, user, 'overview');
   }
 
-  async execute(): Promise<AutomationResult> {
+  async execute(options?: { uploadOnly?: boolean; skipOtp?: boolean; skipLocation?: boolean }): Promise<AutomationResult> {
     return await this.executeStepPattern(
       '/nx/create-profile/overview',
       () => this.fillOverviewForm()

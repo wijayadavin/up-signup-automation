@@ -27,6 +27,7 @@ export interface BrowserConfig {
   proxy?: ProxyConfig;
   user?: User; // Add user for proxy port management
   disableTrackingProtection?: boolean; // Disable tracking protection for headful mode
+  skipProxyTest?: boolean; // Skip proxy testing and use direct connection
 }
 
 export class BrowserManager {
@@ -39,9 +40,10 @@ export class BrowserManager {
       timeout: config.timeout ?? Number(process.env.PUPPETEER_TIMEOUT) ?? 30000,
       userDataDir: config.userDataDir ?? (process.env.PUPPETEER_USER_DATA_DIR ?? './user-data'),
       viewport: config.viewport ?? { width: 1440, height: 1080 },
-      proxy: config.proxy ?? this.loadProxyConfigFromEnv(config.user),
+      proxy: config.skipProxyTest ? undefined : (config.proxy ?? this.loadProxyConfigFromEnv(config.user)),
       user: config.user,
       disableTrackingProtection: config.disableTrackingProtection ?? false,
+      skipProxyTest: config.skipProxyTest ?? false,
     };
   }
 
@@ -53,6 +55,15 @@ export class BrowserManager {
     const country = process.env.PROXY_COUNTRY;
     const zipCode = process.env.PROXY_ZIP_CODE;
 
+    logger.info({ 
+      host, 
+      envPort, 
+      username: username ? '***' : undefined, 
+      password: password ? '***' : undefined,
+      country,
+      zipCode 
+    }, 'Loading proxy configuration from environment');
+
     if (host && envPort && username && password) {
       let port: number;
       
@@ -61,10 +72,10 @@ export class BrowserManager {
         port = this.determineUserProxyPort(user);
       } else {
         // Default to sticky mode (port 10001+)
-        port = 10001;
+        port = parseInt(envPort, 10) || 10001;
       }
       
-      return {
+      const config = {
         host,
         port,
         username,
@@ -73,9 +84,26 @@ export class BrowserManager {
         rotateMinutes: undefined, // Disable rotating mode
         zipCode,
       };
+      
+      logger.info({ 
+        host, 
+        port, 
+        username: '***', 
+        country,
+        zipCode 
+      }, 'Proxy configuration loaded successfully');
+      
+      return config;
+    } else {
+      logger.warn('Incomplete proxy configuration - missing required environment variables');
+      logger.info({ 
+        hasHost: !!host, 
+        hasPort: !!envPort, 
+        hasUsername: !!username, 
+        hasPassword: !!password 
+      }, 'Proxy environment variable status');
+      return undefined;
     }
-
-    return undefined;
   }
   
   // Getter methods for configuration
@@ -190,19 +218,26 @@ export class BrowserManager {
 
       // Add proxy configuration if available
       if (this.config.proxy) {
-        // For Decodo, the host should be country.decodo.com format
-        const proxyHost = this.config.proxy.country 
-          ? `${this.config.proxy.country}.decodo.com`
-          : this.config.proxy.host;
-        
-        const proxyServer = `${proxyHost}:${this.config.proxy.port}`;
-        args.push(`--proxy-server=${proxyServer}`);
-        logger.info({ 
-          proxyServer, 
-          proxyHost, 
-          port: this.config.proxy.port,
-          mode: 'sticky (10-minute sessions)'
-        }, 'Using Decodo proxy server');
+        try {
+          // For Decodo, the host should be country.decodo.com format
+          const proxyHost = this.config.proxy.country 
+            ? `${this.config.proxy.country}.decodo.com`
+            : this.config.proxy.host;
+          
+          const proxyServer = `${proxyHost}:${this.config.proxy.port}`;
+          args.push(`--proxy-server=${proxyServer}`);
+          logger.info({ 
+            proxyServer, 
+            proxyHost, 
+            port: this.config.proxy.port,
+            mode: 'sticky (10-minute sessions)'
+          }, 'Using Decodo proxy server');
+        } catch (error) {
+          logger.error('Failed to configure proxy, continuing without proxy:', error);
+          // Continue without proxy if configuration fails
+        }
+      } else {
+        logger.info('No proxy configuration found, using direct connection');
       }
       
       const launchOptions: any = {
@@ -274,21 +309,26 @@ export class BrowserManager {
       
       // Authenticate with proxy if configured
       if (this.config.proxy) {
-        // For Decodo, use the username exactly as provided (no modification needed)
-        const username = this.config.proxy.username;
-        
-        await page.authenticate({
-          username,
-          password: this.config.proxy.password,
-        });
-        logger.info({ 
-          username, 
-          country: this.config.proxy.country, 
-          zipCode: this.config.proxy.zipCode,
-          host: this.config.proxy.host,
-          port: this.config.proxy.port,
-          mode: 'sticky (10-minute sessions)'
-        }, 'Decodo proxy authentication configured');
+        try {
+          // For Decodo, use the username exactly as provided (no modification needed)
+          const username = this.config.proxy.username;
+          
+          await page.authenticate({
+            username,
+            password: this.config.proxy.password,
+          });
+          logger.info({ 
+            username, 
+            country: this.config.proxy.country, 
+            zipCode: this.config.proxy.zipCode,
+            host: this.config.proxy.host,
+            port: this.config.proxy.port,
+            mode: 'sticky (10-minute sessions)'
+          }, 'Decodo proxy authentication configured');
+        } catch (error) {
+          logger.error('Failed to authenticate with proxy, continuing without proxy:', error);
+          // Continue without proxy if authentication fails
+        }
       }
       
       // Set user agent

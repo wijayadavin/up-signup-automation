@@ -7,6 +7,14 @@ import { SkillsStepHandler } from './steps/SkillsStepHandler';
 import { EducationStepHandler } from './steps/EducationStepHandler';
 import { OverviewStepHandler } from './steps/OverviewStepHandler';
 import { LocationStepHandler } from './steps/LocationStepHandler';
+import { ExperienceStepHandler } from './steps/ExperienceStepHandler';
+import { GoalStepHandler } from './steps/GoalStepHandler';
+import { WorkPreferenceStepHandler } from './steps/WorkPreferenceStepHandler';
+import { ResumeImportStepHandler } from './steps/ResumeImportStepHandler';
+import { CategoriesStepHandler } from './steps/CategoriesStepHandler';
+import { TitleStepHandler } from './steps/TitleStepHandler';
+import { EmploymentStepHandler } from './steps/EmploymentStepHandler';
+import { StepHandler } from './StepHandler.js';
 import { SessionService } from '../services/sessionService.js';
 import { BrowserManager } from '../browser/browserManager.js';
 import { TextVerifiedService } from '../services/textVerifiedService.js';
@@ -42,16 +50,26 @@ export class LoginAutomation extends BaseAutomation {
     this.navigationAutomation = new NavigationAutomation(page, user);
     
     // Initialize step handlers
-    this.stepHandlers = new Map([
+    this.stepHandlers = new Map<string, any>([
+      ['experience', new ExperienceStepHandler(page, user)],
+      ['goal', new GoalStepHandler(page, user)],
+      ['work_preference', new WorkPreferenceStepHandler(page, user)],
+      ['resume_import', new ResumeImportStepHandler(page, user)],
+      ['categories', new CategoriesStepHandler(page, user)],
+      ['title', new TitleStepHandler(page, user)],
+      ['employment', new EmploymentStepHandler(page, user)],
       ['skills', new SkillsStepHandler(page, user)],
       ['education', new EducationStepHandler(page, user)],
       ['overview', new OverviewStepHandler(page, user)],
       ['location', new LocationStepHandler(page, user)],
       // Add more step handlers as they are created
     ]);
+    
+    // Log registered step handlers for debugging
+    logger.info('Registered step handlers:', Array.from(this.stepHandlers.keys()));
   }
 
-  async execute(options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean }): Promise<LoginResult> {
+  async execute(options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string }): Promise<LoginResult> {
     try {
       logger.info('Starting login automation...');
       
@@ -74,12 +92,18 @@ export class LoginAutomation extends BaseAutomation {
         }
       }
       
-      // Go to login page
+      // Go to login page (or check if already logged in)
       let result = await this.goToLoginPage();
       if (result.status !== 'success') {
         return this.convertToLegacyResult(result);
       }
       
+      // Check if we're already logged in (goToLoginPage returns success if already logged in)
+      const currentUrl = this.page.url();
+      if (currentUrl.includes('/nx/create-profile') || currentUrl.includes('/dashboard') || currentUrl.includes('/welcome')) {
+        logger.info('✅ Already logged in, skipping email/password steps...');
+        // Proceed directly to profile creation
+      } else {
       // Enter email
       result = await this.enterEmail();
       if (result.status !== 'success') {
@@ -90,6 +114,28 @@ export class LoginAutomation extends BaseAutomation {
       result = await this.enterPassword();
       if (result.status !== 'success') {
         return this.convertToLegacyResult(result);
+        }
+      }
+      
+      // If specific step is requested, navigate directly to it
+      if (options?.step) {
+        logger.info(`Forcing navigation to step: ${options.step}`);
+        await this.page.goto(`https://www.upwork.com/nx/create-profile/${options.step}`, {
+          waitUntil: 'networkidle2',
+          timeout: 30000,
+        });
+        await this.randomDelay(3000, 5000);
+        
+        // Verify we reached the correct step
+        const currentUrl = this.page.url();
+        if (!currentUrl.includes(`/nx/create-profile/${options.step}`)) {
+          return this.convertToLegacyResult(this.createError(
+            'FORCED_STEP_NAVIGATION_FAILED',
+            `Failed to navigate to ${options.step} step, current URL: ${currentUrl}`
+          ));
+        }
+        
+        logger.info(`Successfully navigated to ${options.step} step`);
       }
       
       // Handle profile creation
@@ -151,25 +197,33 @@ export class LoginAutomation extends BaseAutomation {
       
       // Navigate to Upwork to check if session is still valid
       logger.info('Navigating to Upwork to check session validity...');
-      await this.page.goto('https://www.upwork.com', {
-        waitUntil: 'networkidle2',
-        timeout: 30000,
-      });
       
-      // Wait for page to load
-      await this.waitForPageReady();
+      let navigationSucceeded = true;
+      try {
+        await this.page.goto('https://www.upwork.com', {
+          waitUntil: 'networkidle2',
+          timeout: 60000, // Increased timeout to 60 seconds for session restoration
+        });
+        
+        // Wait for page to load
+        await this.waitForPageReady();
+      } catch (error) {
+        logger.warn('Navigation timeout or error during session restoration, checking current URL anyway...');
+        navigationSucceeded = false;
+      }
+      
+      // Check current URL regardless of navigation success/timeout
+      const currentUrl = this.page.url();
+      logger.info(`Current URL after ${navigationSucceeded ? 'successful navigation' : 'navigation timeout'}: ${currentUrl}`);
       
       // Check if we're logged in by looking for profile creation page or dashboard
-      const currentUrl = this.page.url();
-      logger.info(`Current URL after navigation: ${currentUrl}`);
-      
       const isLoggedIn = currentUrl.includes('/nx/create-profile') || 
                         currentUrl.includes('/ab/account-security') ||
                         currentUrl.includes('/dashboard') ||
                         currentUrl.includes('/welcome');
       
       if (isLoggedIn) {
-        logger.info('Session restored successfully, user is logged in');
+        logger.info('✅ Session restored successfully, user is logged in (detected after timeout)');
         
         // Save session state after successful restoration to update it
         try {
@@ -183,7 +237,7 @@ export class LoginAutomation extends BaseAutomation {
         
         return true;
       } else {
-        logger.info('Session restoration failed, user is not logged in');
+        logger.info('❌ Session restoration failed, user is not logged in');
         return false;
       }
       
@@ -216,6 +270,21 @@ export class LoginAutomation extends BaseAutomation {
   }
 
   private async goToLoginPage(): Promise<AutomationResult> {
+    // First check if we're already logged in
+    const currentUrl = this.page.url();
+    logger.info(`Checking current URL before login attempt: ${currentUrl}`);
+    
+    if (currentUrl.includes('/nx/create-profile')) {
+      logger.info('✅ Already logged in - currently on profile creation page');
+      return this.createSuccess('Already logged in');
+    }
+    
+    if (currentUrl.includes('/dashboard') || currentUrl.includes('/welcome')) {
+      logger.info('✅ Already logged in - currently on dashboard/welcome page');
+      return this.createSuccess('Already logged in');
+    }
+    
+    // If not logged in, navigate to login page
     return await this.navigationAutomation.navigateToUrl(
       'https://www.upwork.com/ab/account-security/login',
       'login'
@@ -259,7 +328,7 @@ export class LoginAutomation extends BaseAutomation {
     ], this.user.password);
   }
 
-  private async handleCreateProfile(options?: { uploadOnly?: boolean; skipOtp?: boolean }): Promise<AutomationResult> {
+  private async handleCreateProfile(options?: { uploadOnly?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string }): Promise<AutomationResult> {
     logger.info('Handling profile creation...');
     
     // Submit password form
@@ -324,8 +393,8 @@ export class LoginAutomation extends BaseAutomation {
       logger.info(`URL after additional wait: ${retryUrl}`);
       
       if (!retryUrl.includes('/nx/create-profile')) {
-        return this.createError(
-          'NOT_ON_CREATE_PROFILE',
+      return this.createError(
+        'NOT_ON_CREATE_PROFILE',
           `Expected create profile page, got ${retryUrl}`
         );
       }
@@ -347,12 +416,42 @@ export class LoginAutomation extends BaseAutomation {
     return await this.resumeProfileCreation(options);
   }
 
-  private async resumeProfileCreation(options?: { uploadOnly?: boolean; skipOtp?: boolean }): Promise<AutomationResult> {
+  private async resumeProfileCreation(options?: { uploadOnly?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string }): Promise<AutomationResult> {
     try {
+      // If specific step is requested, navigate directly to it first
+      if (options?.step) {
+        logger.info(`Forcing navigation to step: ${options.step}`);
+        const stepUrl = `https://www.upwork.com/nx/create-profile/${options.step}`;
+        
+        await this.page.goto(stepUrl, {
+          waitUntil: 'networkidle2',
+          timeout: 30000,
+        });
+        await this.randomDelay(3000, 5000);
+        
+        // Verify we reached the correct step
+        const currentUrl = this.page.url();
+        if (!currentUrl.includes(`/nx/create-profile/${options.step}`)) {
+          return this.createError(
+            'FORCED_STEP_NAVIGATION_FAILED',
+            `Failed to navigate to ${options.step} step, current URL: ${currentUrl}`
+          );
+        }
+        
+        logger.info(`Successfully navigated to ${options.step} step`);
+      }
+      
       const currentUrl = this.page.url();
       const currentStep = this.detectProfileStep(currentUrl);
       
-      logger.info(`Resuming profile creation from step: ${currentStep}, URL: ${currentUrl}, Upload only: ${options?.uploadOnly}`);
+      logger.info(`Resuming profile creation from step: ${currentStep}, URL: ${currentUrl}, Upload only: ${options?.uploadOnly}, Skip location: ${options?.skipLocation}, Force step: ${options?.step}`);
+
+      // Check if we're already on the location page and skipLocation is enabled
+      if (options?.skipLocation && currentStep === 'location') {
+        logger.info('Skip-Location mode: already on location page, marking rate step as completed');
+        await this.markRateStepCompleted();
+        return this.createSuccess('done');
+      }
 
       const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location'];
       let currentStepIndex = this.getStepIndex(currentStep);
@@ -360,18 +459,25 @@ export class LoginAutomation extends BaseAutomation {
       // Execute remaining steps in order
       for (let i = currentStepIndex; i < steps.length; i++) {
         const stepName = steps[i];
+
+        // Re-detect current path before executing each step and realign if needed
+        const urlNow = this.page.url();
+        const detectedNow = this.detectProfileStep(urlNow);
+        if (detectedNow !== stepName && detectedNow !== 'initial') {
+          logger.info(`Detected current step '${detectedNow}' differs from planned '${stepName}'. Realigning execution order.`);
+          i = this.getStepIndex(detectedNow) - 1; // -1 because for-loop will ++i
+          continue;
+        }
         let stepResult: AutomationResult;
         
         // Use step handler if available, otherwise use legacy method
         if (this.stepHandlers.has(stepName)) {
+          logger.info(`Using step handler for: ${stepName}`);
           const handler = this.stepHandlers.get(stepName);
-          // Pass skipOtp option specifically to LocationStepHandler
-          if (stepName === 'location' && options?.skipOtp) {
-            stepResult = await handler.execute({ skipOtp: true });
-          } else {
-            stepResult = await handler.execute();
-          }
+          // Pass options to step handler
+          stepResult = await handler.execute(options);
         } else {
+          logger.warn(`No step handler found for: ${stepName}, using legacy handling`);
           // Fallback to legacy step handling
           stepResult = await this.handleLegacyStep(stepName);
         }
@@ -379,6 +485,41 @@ export class LoginAutomation extends BaseAutomation {
         // Check if step failed
         if (stepResult.status !== 'success') {
           return stepResult;
+        }
+        
+        // Verify URL changed after step completion (except for final location step)
+        if (stepName !== 'location') {
+          await this.randomDelay(2000, 3000); // Wait for potential navigation
+          const currentUrl = this.page.url();
+          const currentStep = this.detectProfileStep(currentUrl);
+          
+          // If we're still on the same step, the step failed to progress
+          if (currentStep === stepName) {
+            logger.error(`Step ${stepName} appears to be stuck - URL did not change after completion`);
+            logger.error(`Current URL: ${currentUrl}, Expected to move from ${stepName}`);
+            return this.createError(
+              `${stepName.toUpperCase()}_STEP_STUCK`,
+              `Step ${stepName} failed to progress - still on same URL: ${currentUrl}`
+            );
+          } else {
+            logger.info(`✅ Step ${stepName} completed successfully - moved from ${stepName} to ${currentStep}`);
+          }
+        }
+        
+        // Special case: if skipLocation is enabled and we just completed the rate step,
+        // check if we're now on the location page and stop there
+        if (stepName === 'rate' && options?.skipLocation) {
+          logger.info('Skip-Location mode: completed rate step, checking if we\'re on location page...');
+          await this.randomDelay(2000, 3000); // Wait for potential redirect
+          
+          const currentUrl = this.page.url();
+          const newStep = this.detectProfileStep(currentUrl);
+          
+          if (newStep === 'location' || currentUrl.includes('/nx/create-profile/location')) {
+            logger.info('Skip-Location mode: redirected to location page after rate step, marking as completed');
+            await this.markRateStepCompleted();
+      return this.createSuccess('done');
+          }
         }
         
         // Special case: if skipOtp is enabled and we just completed the location step,
@@ -390,19 +531,56 @@ export class LoginAutomation extends BaseAutomation {
               waitUntil: 'networkidle2',
               timeout: 30000,
             });
-            await this.randomDelay(2000, 3000);
-            logger.info('Successfully redirected to submit page');
-            return this.createSuccess('done');
+            await this.randomDelay(3000, 4000);
+            
+            // Verify we actually reached the submit page
+            const currentUrl = this.page.url();
+            logger.info(`Current URL after redirect attempt: ${currentUrl}`);
+            
+            if (currentUrl.includes('/nx/create-profile/submit')) {
+              logger.info('✅ Successfully redirected to submit page');
+              return this.createSuccess('done');
+            } else if (currentUrl.includes('/nx/create-profile/location')) {
+              logger.error('❌ Redirect failed: still on location page, profile creation may be incomplete');
+              return this.createError('SUBMIT_REDIRECT_FAILED', `Redirect to submit page failed - still on location page: ${currentUrl}`);
+            } else {
+              logger.warn(`⚠️ Redirected to unexpected page: ${currentUrl}`);
+              // Check if we're on a completion/success page
+              if (currentUrl.includes('/profile') || currentUrl.includes('/dashboard') || currentUrl.includes('/welcome')) {
+                logger.info('Appears to be on a completion page, considering successful');
+                return this.createSuccess('done');
+              } else {
+                return this.createError('SUBMIT_REDIRECT_UNEXPECTED', `Redirected to unexpected page: ${currentUrl}`);
+              }
+            }
           } catch (error) {
             logger.error('Failed to redirect to submit page:', error);
             return this.createError('SUBMIT_REDIRECT_FAILED', `Failed to redirect to submit page: ${error instanceof Error ? error.message : 'Unknown error'}`);
           }
         }
         
+        // Check if we've successfully completed the location step (final step for success)
+        if (stepName === 'location') {
+          logger.info('Location step completed successfully, verifying we are on location page...');
+          
+          // Verify we're actually on the location page
+          const currentUrl = this.page.url();
+          if (currentUrl.includes('/nx/create-profile/location')) {
+            logger.info('✅ Successfully reached location page, waiting 10 seconds...');
+            await this.randomDelay(10000, 10000); // Wait exactly 10 seconds
+            logger.info('✅ Automation completed successfully - reached location page and waited 10 seconds');
+            return this.createSuccess('done');
+          } else {
+            logger.warn(`Expected to be on location page, but current URL is: ${currentUrl}`);
+            return this.createError('LOCATION_PAGE_NOT_REACHED', `Expected location page but got: ${currentUrl}`);
+          }
+        }
 
       }
       
-      return this.createSuccess('done');
+      // If we completed all steps but didn't reach location, something went wrong
+      logger.warn('Completed all steps but did not reach location step - this should not happen');
+      return this.createError('LOCATION_STEP_NOT_COMPLETED', 'All steps completed but location step was not processed');
       
     } catch (error) {
       return this.createError(
@@ -443,27 +621,20 @@ export class LoginAutomation extends BaseAutomation {
     
     // Special handling for welcome step
     if (stepName === 'welcome') {
+      const url = this.page.url();
+      // If we are no longer on welcome, skip gracefully
+      if (!url.includes('/nx/create-profile/welcome')) {
+        logger.info('Skipping welcome step because current path is beyond welcome');
+        return this.createSuccess('welcome_skipped');
+      }
       return await this.handleWelcomeStep();
     }
     
-    // Special handling for experience step
-    if (stepName === 'experience') {
-      return await this.handleExperienceStep();
-    }
+
     
-    // Special handling for goal step
-    if (stepName === 'goal') {
-      return await this.handleGoalStep();
-    }
-    
-    // Special handling for resume import step
-    if (stepName === 'resume_import') {
-      return await this.handleResumeImportStep();
-    }
-    
-    // Special handling for work preference step
-    if (stepName === 'work_preference') {
-      return await this.handleWorkPreferenceStep();
+    // Special handling for employment step
+    if (stepName === 'employment') {
+      return await this.handleEmploymentStep();
     }
     
     // Special handling for rate step
@@ -471,10 +642,29 @@ export class LoginAutomation extends BaseAutomation {
       return await this.handleRateStep();
     }
     
-
-    
     // For now, just try to click next button
-    return await this.navigationAutomation.clickNextButton(stepName);
+    const result = await this.navigationAutomation.clickNextButton(stepName);
+    
+    // For legacy steps, also verify URL change
+    if (result.status === 'success') {
+      await this.randomDelay(2000, 3000); // Wait for potential navigation
+      const currentUrl = this.page.url();
+      const currentStep = this.detectProfileStep(currentUrl);
+      
+      // If we're still on the same step, the step failed to progress
+      if (currentStep === stepName) {
+        logger.error(`Legacy step ${stepName} appears to be stuck - URL did not change after Next button click`);
+        logger.error(`Current URL: ${currentUrl}, Expected to move from ${stepName}`);
+        return this.createError(
+          `${stepName.toUpperCase()}_LEGACY_STEP_STUCK`,
+          `Legacy step ${stepName} failed to progress - still on same URL: ${currentUrl}`
+        );
+      } else {
+        logger.info(`✅ Legacy step ${stepName} completed successfully - moved from ${stepName} to ${currentStep}`);
+      }
+    }
+    
+    return result;
   }
 
   private async handleWelcomeStep(): Promise<AutomationResult> {
@@ -528,170 +718,348 @@ export class LoginAutomation extends BaseAutomation {
     }
   }
 
-  private async handleExperienceStep(): Promise<AutomationResult> {
-    return await this.handleRadioButtonStep('experience', 'FREELANCED_BEFORE');
-  }
 
-  private async handleGoalStep(): Promise<AutomationResult> {
-    return await this.handleRadioButtonStep('goal', 'EXPLORING');
-  }
 
-  private async handleResumeImportStep(): Promise<AutomationResult> {
-    logger.info('Handling resume import step...');
+  private async handleEmploymentStep(): Promise<AutomationResult> {
+    logger.info('Handling employment step...');
     
     try {
       await this.waitForPageReady();
+      await this.randomDelay(2000, 3000); // Extra wait for page to fully load
       
-      // Step 1: Generate PDF resume using user data
-      logger.info('Generating ATS-friendly PDF resume...');
-      const { ResumeGenerator } = await import('../utils/resumeGenerator.js');
-      const pdfPath = await ResumeGenerator.generateResume(this.user);
-      logger.info(`PDF resume generated at: ${pdfPath}`);
+      // Check multiple times for the warning message (it might appear after a delay)
+      let warningMessage = null;
+      let warningText = '';
       
-      // Step 2: Look for the "Upload your resume" button
-      const uploadButton = await this.waitForSelectorWithRetry([
-        'button[data-qa="resume-upload-btn-mobile"]',
-        'button[data-ev-label="resume_upload_btn_mobile"]',
-        'button:contains("Upload your resume")',
-        'button.air3-btn-secondary:contains("Upload your resume")'
-      ], 10000);
-      
-      if (!uploadButton) {
-        return this.createError(
-          'RESUME_UPLOAD_BUTTON_NOT_FOUND',
-          'Upload your resume button not found'
-        );
-      }
-      
-      logger.info('Found Upload your resume button, clicking it...');
-      await this.clickElement(uploadButton);
-      await this.randomDelay(2000, 4000);
-      
-      // Wait for upload modal to appear
-      const uploadModal = await this.waitForSelectorWithRetry([
-        'input[type="file"]',
-        '[data-qa="file-upload-input"]',
-        'input[accept*="pdf"]'
-      ], 10000);
-      
-      if (!uploadModal) {
-        return this.createError(
-          'RESUME_UPLOAD_MODAL_NOT_FOUND',
-          'File upload modal not found after clicking upload button'
-        );
-      }
-      
-      logger.info('Upload modal appeared, looking for file input...');
-      
-      // Step 5: Find the file input element directly (it should be available in the modal)
-      const fileInput = await this.waitForSelectorWithRetry([
-        'input[type="file"]',
-        'input[accept*="pdf"]',
-        'input[accept*="doc"]',
-        'input[accept*="txt"]'
-      ], 10000);
-      
-      if (!fileInput) {
-        return this.createError(
-          'RESUME_FILE_INPUT_NOT_FOUND',
-          'File input not found in upload modal'
-        );
-      }
-      
-      logger.info('File input found, uploading generated PDF directly...');
-      
-      // Upload the file directly to the input element without clicking choose file
-      try {
-        await (fileInput as any).uploadFile(pdfPath);
-        logger.info('PDF file uploaded successfully');
-      } catch (uploadError) {
-        logger.warn('Direct upload failed, trying alternative method...');
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        logger.info(`Checking for employment warning (attempt ${attempt}/3)...`);
         
-        // Alternative method: Set files property directly
-        await fileInput.evaluate((input: Element, filePath: string) => {
-          const htmlInput = input as HTMLInputElement;
-          // Create a new file list with our file
-          const dt = new DataTransfer();
-          fetch(filePath)
-            .then(response => response.blob())
-            .then(blob => {
-              const file = new File([blob], 'resume.pdf', { type: 'application/pdf' });
-              dt.items.add(file);
-              htmlInput.files = dt.files;
-              
-              // Trigger change event
-              const event = new Event('change', { bubbles: true });
-              htmlInput.dispatchEvent(event);
-            });
-        }, pdfPath);
+        warningMessage = await this.page.$('[data-qa="invalid-item-message"]');
+        if (warningMessage) {
+          warningText = await warningMessage.evaluate((el: Element) => el.textContent?.trim() || '');
+          logger.warn(`Employment warning detected: ${warningText}`);
+          break;
+        }
         
-        await this.randomDelay(2000, 3000);
-        logger.info('Alternative upload method completed');
+        if (attempt < 3) {
+          await this.randomDelay(2000, 3000);
+        }
       }
       
-      // Step 6: Wait for file processing (green checkmark appears)
-      logger.info('Waiting for file processing completion...');
-      await this.randomDelay(3000, 5000);
-      
-      // Look for processing indicators (green checkmark, success message, etc.)
-      const processingComplete = await this.waitForSelectorWithRetry([
-        '.upload-success',
-        '.file-uploaded',
-        '[data-qa="upload-success"]',
-        '.green-checkmark',
-        '.air3-icon-check'
-      ], 15000);
-      
-      if (processingComplete) {
-        logger.info('File processing completed successfully');
-      } else {
-        logger.warn('File processing indicator not found, but continuing...');
-      }
-      
-      // Now look for the Continue button
-      const continueButton = await this.waitForSelectorWithRetry([
-        'button[data-qa="resume-upload-continue-btn"]',
-        'button:contains("Continue")',
-        'button.air3-btn-primary:contains("Continue")'
-      ], 10000);
-      
-      if (continueButton) {
-        logger.info('Found Continue button, clicking it...');
-        await this.clickElement(continueButton);
-        await this.randomDelay(2000, 4000);
+      if (warningMessage && warningText.includes('missing anything')) {
+        logger.info('Detected incomplete employment information, looking for edit button...');
         
-        // Wait for navigation
-        await this.waitForNavigation();
+        // Look for the edit button with multiple attempts
+        let editButton = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          logger.info(`Looking for edit button (attempt ${attempt}/3)...`);
+          
+          editButton = await this.waitForSelectorWithRetry([
+            'button[data-qa="edit-item"]',
+            'button[data-ev-label="edit_item"]',
+            'button[aria-label="Edit"]',
+            '.air3-btn-circle[aria-label="Edit"]',
+            'button.air3-btn-secondary.air3-btn-circle',
+            'button:contains("Edit")',
+            '.air3-btn-circle:has(svg)',
+            '[data-qa="edit-item"]'
+          ], 5000);
+          
+          if (editButton) {
+            logger.info('Found edit button');
+            break;
+          }
+          
+          if (attempt < 3) {
+            await this.randomDelay(1000, 2000);
+          }
+        }
         
-        // Verify we navigated to the next step
-        const newUrl = this.page.url();
-        if (newUrl.includes('/nx/create-profile/') && !newUrl.includes('/resume-import')) {
-          logger.info('Successfully navigated to next step after resume import');
-          return this.createSuccess();
+        if (editButton) {
+          logger.info('Found edit button, clicking to fix employment information...');
+          await this.clickElement(editButton);
+          await this.randomDelay(3000, 4000); // Longer wait for modal to appear
+          
+          // Wait for the edit modal to appear with retry
+          let modalAppeared = false;
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              await this.page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+              modalAppeared = true;
+              logger.info('Employment edit modal appeared');
+              break;
+            } catch (error) {
+              logger.info(`Modal appearance attempt ${attempt}/3 failed, retrying...`);
+              if (attempt < 3) {
+                await this.randomDelay(2000, 3000);
+              }
+            }
+          }
+          
+          if (!modalAppeared) {
+            logger.error('Employment edit modal did not appear after multiple attempts');
+            return this.createError('EMPLOYMENT_MODAL_NOT_APPEARED', 'Employment edit modal did not appear');
+          }
+          
+          // Handle the missing information in the modal
+          const modalResult = await this.fillEmploymentModal();
+          if (modalResult.status !== 'success') {
+            return modalResult;
+          }
+          
+          // After successfully filling modal, wait and try to proceed
+          await this.randomDelay(3000, 4000);
+          logger.info('Employment information updated, proceeding to next step...');
+          
         } else {
-          return this.createError(
-            'RESUME_IMPORT_NAVIGATION_FAILED',
-            `Failed to navigate after resume import. Current URL: ${newUrl}`
-          );
+          logger.warn('Edit button not found after multiple attempts, but warning detected');
+          // Try to proceed anyway - the warning might be spurious
         }
       } else {
-        return this.createError(
-          'RESUME_CONTINUE_BUTTON_NOT_FOUND',
-          'Continue button not found in resume upload modal'
-        );
+        logger.info('No employment warning detected or warning does not indicate missing information');
       }
       
+      // If no warning or after handling it, try to proceed with next button
+      logger.info('Attempting to proceed to next step from employment...');
+      return await this.navigationAutomation.clickNextButton('employment');
+      
     } catch (error) {
+      logger.error('Error in handleEmploymentStep:', error);
       return this.createError(
-        'RESUME_IMPORT_STEP_FAILED',
-        `Resume import step failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+        'EMPLOYMENT_STEP_FAILED',
+        `Employment step failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
 
-  private async handleWorkPreferenceStep(): Promise<AutomationResult> {
-    return await this.handleCheckboxStep('work_preference', ['TALENT_MARKETPLACE'], 5);
+  private async fillEmploymentModal(): Promise<AutomationResult> {
+    logger.info('Filling employment modal with missing information...');
+    
+    try {
+      // Wait for modal to be fully loaded
+      await this.randomDelay(2000, 3000);
+      logger.info('Waiting for employment modal to be fully loaded...');
+      
+      // Wait for modal content to be present
+      await this.page.waitForSelector('[role="dialog"]', { timeout: 10000 });
+      await this.randomDelay(1000, 2000);
+      
+      // Check and fill location if missing - try multiple selectors
+      logger.info('Looking for location input field...');
+      const locationInput = await this.waitForSelectorWithRetry([
+        'input[aria-labelledby="location-label"]',
+        'input[placeholder*="London"]',
+        'input[placeholder*="Ex: London"]',
+        'input[type="text"][aria-labelledby*="location"]',
+        '[role="dialog"] input[type="text"]:not([aria-labelledby*="title"]):not([aria-labelledby*="company"])',
+        '[role="dialog"] input[placeholder*="Location"]'
+      ], 10000);
+      
+      if (locationInput) {
+        const currentValue = await locationInput.evaluate((el: Element) => (el as HTMLInputElement).value);
+        logger.info(`Location field current value: "${currentValue}"`);
+        
+        if (!currentValue || currentValue.trim() === '') {
+          logger.info('Location field is empty, filling it with Manchester...');
+          await this.clearAndType(locationInput, 'Manchester');
+          await this.randomDelay(2000, 3000);
+          logger.info('Location field filled successfully');
+        } else {
+          logger.info(`Location already filled with: ${currentValue}`);
+        }
+      } else {
+        logger.warn('Location input field not found - continuing anyway');
+      }
+      
+      // Check for "currently working" checkbox - be more specific
+      logger.info('Looking for "currently working" checkbox...');
+      
+      // First try to find the checkbox by looking for the label text
+      const checkboxContainer = await this.page.evaluate(() => {
+        const labels = Array.from(document.querySelectorAll('label'));
+        const targetLabel = labels.find(label => 
+          label.textContent?.includes('I am currently working in this role')
+        );
+        if (targetLabel) {
+          const checkbox = targetLabel.querySelector('input[type="checkbox"]');
+          return {
+            found: true,
+            checked: checkbox ? (checkbox as HTMLInputElement).checked : false,
+            labelExists: true
+          };
+        }
+        return { found: false, checked: false, labelExists: false };
+      });
+      
+      logger.info(`Checkbox status: found=${checkboxContainer.found}, checked=${checkboxContainer.checked}`);
+      
+      if (checkboxContainer.found && !checkboxContainer.checked) {
+        logger.info('Checkbox is not checked, clicking to check it...');
+        
+        // Try multiple approaches to click the checkbox
+        const checkboxClicked = await this.page.evaluate(() => {
+          const labels = Array.from(document.querySelectorAll('label'));
+          const targetLabel = labels.find(label => 
+            label.textContent?.includes('I am currently working in this role')
+          );
+          if (targetLabel) {
+            targetLabel.click();
+            return true;
+          }
+          return false;
+        });
+        
+        if (checkboxClicked) {
+          await this.randomDelay(1500, 2500);
+          logger.info('Checkbox clicked successfully');
+        } else {
+          logger.warn('Failed to click checkbox - continuing anyway');
+        }
+      } else if (checkboxContainer.checked) {
+        logger.info('Checkbox is already checked');
+      } else {
+        logger.warn('Checkbox not found - continuing anyway');
+      }
+      
+      // Extra wait before saving
+      await this.randomDelay(2000, 3000);
+      
+      // Look for and click the Save button with more robust selectors
+      logger.info('Looking for Save button...');
+      const saveButton = await this.waitForSelectorWithRetry([
+        'button[class*="btn-primary"]:contains("Save")',
+        'button:contains("Save")',
+        '[role="dialog"] button:contains("Save")',
+        'button[data-qa="btn-save"]',
+        '.air3-btn-primary:contains("Save")',
+        '[role="button"]:contains("Save")',
+        'button[type="submit"]'
+      ], 10000);
+      
+      if (saveButton) {
+        logger.info('Found Save button, clicking it...');
+        await this.clickElement(saveButton);
+        await this.randomDelay(3000, 4000); // Longer wait for save processing
+        
+        // Wait for modal to close with more robust checking
+        logger.info('Waiting for modal to close...');
+        let modalClosed = false;
+        
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await this.page.waitForSelector('[role="dialog"]', { timeout: 3000, hidden: true });
+            modalClosed = true;
+            logger.info('Modal closed successfully');
+            break;
+          } catch (error) {
+            logger.info(`Modal close attempt ${attempt}/3 timed out, checking if modal still exists...`);
+            
+            const modalStillExists = await this.page.$('[role="dialog"]');
+            if (!modalStillExists) {
+              modalClosed = true;
+              logger.info('Modal is no longer present, considering it closed');
+              break;
+            }
+            
+            if (attempt < 3) {
+              await this.randomDelay(2000, 3000);
+            }
+          }
+        }
+        
+        if (!modalClosed) {
+          logger.warn('Modal may still be open, but continuing...');
+        }
+        
+        // Extra wait after modal close
+        await this.randomDelay(2000, 3000);
+        logger.info('Employment modal processing completed');
+        
+        return this.createSuccess();
+      } else {
+        logger.error('Save button not found in employment modal');
+        return this.createError(
+          'EMPLOYMENT_SAVE_BUTTON_NOT_FOUND',
+          'Save button not found in employment modal after extended wait'
+        );
+      }
+      
+    } catch (error) {
+      logger.error('Error in fillEmploymentModal:', error);
+      return this.createError(
+        'EMPLOYMENT_MODAL_FILL_FAILED',
+        `Failed to fill employment modal: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
+
+  private async handleRateStep(): Promise<AutomationResult> {
+    logger.info('Handling rate step...');
+    
+    try {
+      await this.waitForPageReady();
+      await this.randomDelay(2000, 3000);
+      
+      // Generate random hourly rate between $10-$20
+      const minRate = 10;
+      const maxRate = 20;
+      const randomRate = Math.floor(Math.random() * (maxRate - minRate + 1)) + minRate;
+      const rateValue = `${randomRate}.00`;
+      
+      logger.info(`Setting hourly rate to $${rateValue}`);
+      
+      // Look for the currency input field
+      const currencyInput = await this.waitForSelectorWithRetry([
+        'input[data-test="currency-input"]',
+        'input[data-ev-label="currency_input"]',
+        'input[placeholder="$0.00"]',
+        'input[aria-describedby*="currency-hourly"]',
+        'input[data-ev-currency="USD"]',
+        'input[type="text"][placeholder*="$"]',
+        '.air3-input[placeholder*="$"]'
+      ], 10000);
+      
+      if (!currencyInput) {
+        logger.error('Currency input field not found on rate page');
+        return this.createError('RATE_INPUT_NOT_FOUND', 'Currency input field not found on rate page');
+      }
+      
+      // Clear and enter the rate
+      logger.info(`Entering rate: $${rateValue}`);
+      await this.clearAndType(currencyInput, rateValue);
+      await this.randomDelay(2000, 3000);
+      
+      // Verify the rate was entered correctly
+      const enteredValue = await currencyInput.evaluate((el: Element) => (el as HTMLInputElement).value);
+      logger.info(`Rate entered: ${enteredValue}`);
+      
+      if (enteredValue.includes(rateValue) || enteredValue.includes(randomRate.toString())) {
+        logger.info('✅ Rate entered successfully');
+      } else {
+        logger.warn(`⚠️ Rate verification unclear. Expected: ${rateValue}, Got: ${enteredValue}`);
+      }
+      
+      // Wait a bit for any validation
+      await this.randomDelay(2000, 3000);
+      
+      // Try to proceed to next step
+      logger.info('Attempting to proceed from rate step...');
+      return await this.navigationAutomation.clickNextButton('rate');
+      
+    } catch (error) {
+      logger.error('Error in handleRateStep:', error);
+      return this.createError(
+        'RATE_STEP_FAILED',
+        `Rate step failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+
+
+
+
+
 
   private async handleRadioButtonStep(stepName: string, radioValue: string): Promise<AutomationResult> {
     logger.info(`Handling ${stepName} step...`);
@@ -931,72 +1299,7 @@ export class LoginAutomation extends BaseAutomation {
     }
   }
 
-  private async handleRateStep(): Promise<AutomationResult> {
-    logger.info('Handling rate step...');
-    
-    try {
-      await this.waitForPageReady();
-      
-      // Look for the rate input field
-      const rateField = await this.waitForSelectorWithRetry([
-        'input[data-test="currency-input"]',
-        'input[aria-describedby*="hourly-rate"]',
-        'input[placeholder="$0.00"]',
-        'input[data-ev-currency="USD"]'
-      ], 10000);
-      
-      if (!rateField) {
-        return this.createError(
-          'RATE_FIELD_NOT_FOUND',
-          'Rate input field not found'
-        );
-      }
-      
-      // Generate a random rate between $10-20
-      const rate = Math.floor(Math.random() * 11) + 10; // 10 to 20
-      const rateValue = rate.toString();
-      
-      logger.info(`Setting hourly rate to $${rateValue}`);
-      
-      // Clear and type the rate
-      await this.clearAndType(rateField, rateValue);
-      
-      // Verify the rate was entered correctly (lenient verification)
-      const enteredRate = await rateField.evaluate((el: Element) => (el as HTMLInputElement).value);
-      logger.info(`Rate verification - Expected: ${rateValue}, Got: ${enteredRate}`);
-      
-      // More lenient verification: check if the field has any value and contains our rate
-      if (!enteredRate || enteredRate.trim() === '') {
-        logger.warn(`Rate field is empty, retrying once...`);
-        
-        // Retry once
-        await this.clearAndType(rateField, rateValue);
-        await this.randomDelay(500, 1000);
-        
-        const retryRate = await rateField.evaluate((el: Element) => (el as HTMLInputElement).value);
-        logger.info(`Rate retry verification - Expected: ${rateValue}, Got: ${retryRate}`);
-        
-        // Only fail if still completely empty
-        if (!retryRate || retryRate.trim() === '') {
-          return this.createError(
-            'RATE_ENTRY_FAILED',
-            `Failed to enter rate correctly. Field is empty after retry.`
-          );
-        }
-      }
-      
-      logger.info(`Rate set successfully: ${enteredRate || 'value entered'}`);
-      
-      // Click the Next button
-      return await this.navigationAutomation.clickNextButton('rate');
-      
-    } catch (error) {
-      return this.createError(
-        'RATE_STEP_FAILED',
-        `Rate step failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
-  }
+
 
   private convertToLegacyResult(result: AutomationResult): LoginResult {
     return {
@@ -1264,12 +1567,12 @@ export class LoginAutomation extends BaseAutomation {
         const textVerifiedService = new TextVerifiedService();
         logger.info('Waiting for OTP from TextVerified service...');
         
-        // Wait for OTP with 100 second timeout
-        const receivedOtp = await textVerifiedService.waitForOTP(this.user.id, 100);
+        // Wait for OTP with 3 minute timeout
+        const receivedOtp = await textVerifiedService.waitForOTP(this.user.id, 180);
         
         if (!receivedOtp) {
-          logger.error('No OTP received from TextVerified within 100 seconds');
-          return this.createError('OTP_NOT_RECEIVED', 'No OTP received from TextVerified within 100 seconds');
+          logger.error('No OTP received from TextVerified within 180 seconds');
+          return this.createError('OTP_NOT_RECEIVED', 'No OTP received from TextVerified within 180 seconds');
         }
         
         otpCode = receivedOtp;
@@ -1351,6 +1654,24 @@ export class LoginAutomation extends BaseAutomation {
     } catch (error) {
       logger.error('Phone verification handling failed:', error);
       return this.createError('PHONE_VERIFICATION_ERROR', `Phone verification error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async markRateStepCompleted(): Promise<void> {
+    try {
+      logger.info('Marking rate step as completed...');
+      
+      const db = await import('../database/connection.js').then(m => m.getDatabase());
+      await db
+        .updateTable('users')
+        .set({ rate_step_completed_at: new Date() })
+        .where('id', '=', this.user.id)
+        .execute();
+      
+      logger.info(`✅ Rate step marked as completed for user ${this.user.id}`);
+    } catch (error) {
+      logger.error('Failed to mark rate step as completed:', error);
+      throw error;
     }
   }
 }

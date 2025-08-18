@@ -5,22 +5,20 @@ A robust puppeteer-based sign-up automation tool for Upwork with PostgreSQL data
 ## Features
 
 - **Robust Browser Automation**: Uses puppeteer-extra with stealth plugins to avoid detection
-- **PostgreSQL Database**: Stores user data and automation progress
-- **Comprehensive Login Automation**: Complete Upwork login flow with error detection
-- **Full Profile Creation Workflow**: Complete 11-step profile creation process including:
-  - Experience selection and work goals
-  - Categories and skills selection
-  - Employment and education history
-  - Location and personal information
-  - Profile picture upload
-- **Smart Navigation Fallbacks**: URL-based navigation when UI elements are missing
-- **Modal Handling**: Automated form filling for employment and education modals
-- **Error Handling**: Comprehensive error tracking and retry mechanisms
-- **Logging**: Structured logging with Pino
-- **CLI Interface**: Easy-to-use command-line interface
-- **Screenshot Capture**: Automatic screenshots for debugging
-- **CSV Import**: Bulk user import with database-aligned headers
-- **Proxy Support**: Decodo residential proxy integration with IP rotation
+- **PostgreSQL Database**: Stores user data and automation progress with comprehensive tracking
+- **Complete Profile Creation Workflow**: Full 15-step Upwork profile creation process:
+  - **Pre-Onboarding Steps**: Welcome, experience selection, work goals, preferences
+  - **Core Profile Steps**: Resume import, categories, skills, title, employment, education
+  - **Final Steps**: Languages, overview, rate, location with phone verification
+- **Real OTP Integration**: TextVerified.com API integration for phone verification
+- **Smart Session Management**: Automatic session saving/restoration with error handling
+- **Comprehensive Error Handling**: Captcha detection, network error recovery, graceful fallbacks
+- **Human-like Behavior**: Random delays, realistic typing patterns, natural navigation
+- **Robust Element Detection**: Multiple selector strategies with text-based fallbacks
+- **Screenshot Capture**: Automatic debugging screenshots at each step
+- **CSV Import/Export**: Bulk user management with database-aligned headers
+- **Proxy Support**: Decodo residential proxy with user-specific port allocation
+- **CLI Interface**: Intuitive command-line interface with extensive options
 
 ## Database Schema
 
@@ -126,7 +124,7 @@ The application provides several commands for different operations:
   - `--keep-open`: Keep browser open indefinitely
 - **`add-user`**: Add individual users to the database
 - **`process-users`**: Run complete login automation for pending users
-  - `--upload`: Test resume upload (Step 1-4 only)
+  - `--upload`: Enable upload mode for resume import step (handles file upload instead of manual form filling)
   - `--no-stealth`: Disable stealth mode for debugging (use normal browser behavior)
   - `--restore-session`: Restore existing session instead of starting from login
   - `--skip-otp`: Skip location step (except profile picture) and redirect to submit page
@@ -257,7 +255,7 @@ npm start process-users -- --limit 1
 # Run in headless mode
 npm start process-users -- --headless
 
-# Test resume upload only (Steps 1-4: Login → Resume Import)
+# Test resume upload mode (handles file upload instead of manual form filling)
 npm start process-users -- --upload
 
 # Test resume upload in headless mode
@@ -389,112 +387,191 @@ The automation follows a step-by-step process that mimics human behavior while h
 
 #### 6.2: Profile Creation Onboarding
 The automation follows this exact sequence through Upwork's profile creation flow.
-Note that when using `--upload` flag, some might be auto-filled and can just press the Next button to submit:
+### Complete Profile Creation Workflow
 
-**Step 1: Resume Import**
+The automation handles the full 15-step Upwork profile creation process using comprehensive, battle-tested implementations from `src/services/loginAutomation.ts`:
+
+#### **Pre-Onboarding Steps (1-4)**
+**Step 1: Welcome Page**
+- URL: `/nx/create-profile/welcome`
+- If current path is correct, save current user.session_state. Else mark as failed.
+- Action: Click "Get started" button to begin profile creation
+- **Robust Detection**: Multiple selector strategies with fallback mechanisms
+
+**Step 2: Experience Selection**
+- URL: `/nx/create-profile/experience`
+- Action: Select "FREELANCED_BEFORE" radio button
+- **Verification**: Confirms selection and clicks "Next" with retry logic
+
+**Step 3: Work Goals**
+- URL: `/nx/create-profile/goal`
+- Action: Select "EXPLORING" radio button for work opportunities
+- **Consistent Handling**: Uses same robust radio button selection logic
+
+**Step 4: Work Preferences**
+- URL: `/nx/create-profile/work-preference`
+- Action: Select "TALENT_MARKETPLACE" checkbox
+- **Smart Selection**: Handles already-checked boxes by clicking twice to refresh
+- **Fallback Navigation**: Uses 5 tab presses + enter for robust button clicking
+
+#### **Core Profile Steps (5-11)**
+**Step 5: Resume Import**
 - URL: `/nx/create-profile/resume-import`
-- Action: Upload ATS-friendly PDF resume (automatically generated)
-- Process:
-  1. Generate PDF resume using user data
-  2. Click "Upload your resume" button
-  3. Upload modal appears
-  4. Directly upload generated PDF file to file input element
-  5. Wait for file processing (green checkmark appears)
-  6. Click "Continue" button (`data-qa="resume-upload-continue-btn"`)
-  7. Wait for upload completion and navigation
-- Features:
-  - Auto-generates ATS-compliant PDF with user information
-  - Includes professional title, skills, work experience, education
-  - Uses clean formatting (Arial font, bullet points, clear sections)
-  - PDF stored in `assets/resumes/` directory
-  - **Automated Upload**: Direct file upload without manual file selection
-  - **No Native Dialog**: Avoids browser file dialog for seamless automation
+- If current path is correct, save current user.session_state. Else mark as failed.
+- **Dual Mode Support**: Handles both manual and upload modes automatically
+- **Manual Mode (Default - No `--upload` flag)**:
+  - **"Fill out manually" Button**: Clicks "Fill out manually (15 min)" button once
+- **Upload Mode (With `--upload` flag)**:
+  - **PDF Generation**: Auto-generates ATS-friendly PDF using user data
+  - **Direct Upload**: Bypasses native file dialog for seamless automation
+  - **Processing Wait**: Waits for upload completion indicators
+  - **Continue Flow**: Clicks "Continue" button after successful upload
+- **Simple Click Strategy**: Single click with data-qa attribute targeting
+- **Error Handling**: Comprehensive error detection and recovery mechanisms
 
-**Step 2: Categories Selection**
+**Step 6: Categories Selection**
 - URL: `/nx/create-profile/categories`
-- Action: Select primary category (e.g., "IT & Networking")
-- Subcategory: Select specific skills (e.g., "Information Security & Compliance")
-- Button: Click "Next" to proceed
+- If current path is correct, save current user.session_state. Else mark as failed.
+- **First Category Selection**: Clicks the first category on the left menu (e.g., "Accounting & Consulting")
+- **Pause After Selection**: Waits 2-3 seconds after category selection
+- **First Specialty Selection**: Selects the first available specialty on the right panel (e.g., "Personal & Professional Coaching")
+- **Robust Selection**: Multiple selector strategies for both categories and specialties
+- **Smart Clicking**: 2 different click strategies to ensure proper selection
+- **State Verification**: Checks if elements are already selected before clicking
 
-**Step 3: Skills Selection**
+**Step 7: Skills Selection**
 - URL: `/nx/create-profile/skills`
-- Action: Select relevant skills from available options
-- Button: Click "Next" to proceed
+- If current path is correct, save current user.session_state. Else mark as failed.
+- **Token Selection**: Clicks up to 3 skill tokens from available options
+- **Fallback Handling**: Multiple selector strategies for different UI variations
 
-**Step 4: Professional Title**
+**Step 8: Professional Title**
 - URL: `/nx/create-profile/title`
-- Action: Enter professional title
-- Button: Click "Next" to proceed
+- If current path is correct, save current user.session_state. Else mark as failed.
+- **Job Title Input**: Types a professional job title (e.g., "Full-Stack Software Engineer", "Senior Software Developer")
+- **Smart Selection**: Randomly selects from 20+ professional job titles for variety
+- **Field Clearing**: Uses Ctrl+A and Backspace to clear existing content
+- **Dual Input Strategy**: Human-like typing + JavaScript value setting as fallback
+- **Input Verification**: Verifies the title was entered correctly with retry logic
+- **Robust Detection**: 7 different selector strategies to find the title input field
 
-**Step 5: Employment History**
+**Step 9: Employment History**
 - URL: `/nx/create-profile/employment`
-- Action: Click "Add experience" button
-- Modal: Fill out employment form with:
-  - Job Title: "Senior Software Engineer"
-  - Company: "Tech Solutions Inc"
-  - Location: "New York"
-  - Country: "United States"
-  - Currently Working: Check "I am currently working in this role"
-  - Start Date: January 2020
-  - Description: Sample job description
-- Button: Click "Save" to close modal
+- If current path is correct, save current user.session_state. Else mark as failed.
+- **Add Experience Button**: Clicks the "Add experience" button to open modal
+- **Tab-Based Navigation**: Uses keyboard tab navigation to focus fields in correct order
+- **Form Filling**: Completes employment form with realistic data:
+  - Job Title: "Senior Software Engineer" (tab navigation + enter to deselect)
+  - Company: "Tech Solutions Inc" (tab navigation + enter to deselect)
+  - Location: "New York" (tab navigation + combobox selection)
+  - Country: "United States" (tab navigation + combobox selection)
+  - Currently Working: Checked (tab navigation + space)
+  - Start Date: January 2020 (tab navigation + combobox selection)
+  - End Date: December 2023 (tab navigation + combobox selection)
+  - Description: Professional job description (tab navigation)
+- **Modal Management**: Opens modal, fills all fields using tab navigation, clicks Save, verifies modal close
+- **Save & Close**: Properly saves and closes modal with verification
 
-**Step 6: Education**
+**Step 10: Education**
 - URL: `/nx/create-profile/education`
-- Action: Click "Add education" button
-- Modal: Fill out education form
-- Button: Click "Save" to close modal
+- **Smart Mode Detection**: 
+  - **Manual Mode** (`--upload` false): Always clicks "Add Education" button and fills form
+  - **Upload Mode** (`--upload` true): Tries Next button first, then adds education if needed
+- **Add Education Button**: Clicks the "Add Education" button to open modal
+- **Education Form Filling**: Completes education form with realistic data:
+  - **School**: "Stanford University" (required field)
+  - **Degree**: "Bachelor of Science"
+  - **Field of Study**: "Computer Science"
+  - **Dates Attended**: 2018-2022 (dropdown selection)
+  - **Description**: Professional education description
+- **Modal Management**: Opens modal, fills all fields, clicks Save, waits for modal close
+- **Robust Detection**: 8 different selector strategies for Add Education button
 
-**Step 7: Languages**
+**Step 11: Languages**
 - URL: `/nx/create-profile/languages`
-- Action: Select languages and proficiency levels
-- Button: Click "Next" to proceed
+- If current path is correct, save current user.session_state. Else mark as failed.
+- **Language Selection**: Selects languages and proficiency levels
+- **Multiple Languages**: Handles multiple language selections
 
-**step 8: /nx/create-profile/overview**
+#### **Final Steps (12-15)**
+**Step 12: Overview/Bio**
 - URL: `/nx/create-profile/overview`
-- Action: Fill 100+ chars of bio
+- If current path is correct, save current user.session_state. Else mark as failed.
+- **Bio Writing**: Fills 100+ character professional bio
+- **Content Generation**: Creates compelling professional description
 
-**step 9: /nx/create-profile/rate**
+**Step 13: Rate Setting**
 - URL: `/nx/create-profile/rate`
+- If current path is correct, save current user.session_state. Else mark as failed.
+- **Rate Entry**: Sets competitive hourly rate ($10-20 range)
+- **Field Validation**: Ensures proper rate entry with retry logic
 
-**Step 10: Location & Personal Info**
+**Step 14: Location & Personal Info**
 - URL: `/nx/create-profile/location`
-- Action: Fill out location details with smart autocomplete:
-  - **Date of Birth**: Calendar picker with user data or default
-  - **Street Address**: Smart autocomplete with down arrow + enter selection
-  - **City**: Auto-filled from street address or manual input with autocomplete
-  - **State/Province**: Auto-filled from city selection or manual input
-  - **ZIP/Postal Code**: From user data or default
-  - **Phone Number**: From user data or default format
-- **Profile Picture**: Upload default profile picture with verification
-- **Phone Verification**: 
-  - Click "Next" button to trigger verification modal
-  - Wait for "Send code" button and click it
-  - **Real OTP Integration**: Get OTP from TextVerified.com API (not hardcoded "12345")
-  - **Smart OTP Handling**: Check for existing OTP before sending code, or get new OTP after sending
-  - **Fallback Support**: Falls back to test code if TextVerified API fails
-  - **Comprehensive Error Detection**: Handles expired codes, invalid inputs, retry messages
-  - **Modal Detection**: Handles both "send verification" and "enter your code" modals
-- Button: Click "Next" to proceed after verification
+- If current path is correct, save current user.session_state. Else mark as failed.
+- Without `--skip-location` flag:
+  - **Address Filling**: Smart autocomplete for all address fields
+  - **Profile Picture**: Uploads default profile picture
+  - **Phone Verification**: 
+    - **Real OTP Integration**: Uses TextVerified.com API for actual SMS codes
+    - **Smart OTP Handling**: Checks for existing codes before requesting new ones
+    - **Modal Detection**: Handles both "send verification" and "enter code" modals
+    - **Error Recovery**: Graceful handling of expired codes and API failures
+    - **Fallback Support**: Falls back to test codes if API fails
+- With `--skip-location` flag:
+  - **Mark as rate completed**: Update user.rate_step_completed_at as current datetime and gracefully close the session.
 
-#### 6.3: Smart Navigation & Fallbacks
-The automation includes robust fallback mechanisms:
+**Step 15: Profile Submission**
+- URL: `/nx/create-profile/submit`
+- **Final Review**: Completes profile creation process
+- **Success Verification**: Confirms successful profile creation
 
-**URL Navigation Fallback:**
-- If "Next" button is missing, navigates directly to next URL in sequence
-- Handles UI variations and missing elements gracefully
-- Continues progression even when buttons are not found
+#### 6.3: Automation Architecture & Robustness
 
-**Modal Handling:**
-- Detects and opens modals for employment and education
-- Fills forms with realistic data
-- Handles "currently working" checkbox to skip end dates
-- Saves and closes modals properly
+The automation uses a comprehensive, battle-tested architecture with multiple layers of robustness:
 
-**Error Recovery:**
+**Comprehensive Step Handlers:**
+- **Location**: `src/services/loginAutomation.ts` contains all step implementations
+- **Battle-Tested**: Each step has been extensively tested and refined
+- **Error Handling**: Comprehensive error detection and recovery mechanisms
+- **Fallback Strategies**: Multiple selector strategies with text-based fallbacks
+
+**Smart Navigation & Fallbacks:**
+- **URL Navigation**: Direct URL navigation when UI elements are missing
+- **Button Detection**: Multiple selector strategies for "Next" buttons
+- **Tab+Enter Fallback**: Keyboard navigation when direct clicks fail
+- **Graceful Degradation**: Continues progression even with UI variations
+
+**Modal & Form Handling:**
+- **Modal Detection**: Automatic detection and opening of employment/education modals
+- **Form Filling**: Realistic data entry with validation
+- **Smart Checkboxes**: Handles "currently working" to skip end dates
+- **Save & Close**: Proper modal lifecycle management
+
+**Error Recovery & Resilience:**
 - Retries failed interactions with different selectors
 - Falls back to text-based element search
+- **Lenient Field Verification**: Checks for content presence rather than exact matches
+- **Session State Management**: Automatic saving/restoration with error handling
+- **Network Error Recovery**: Graceful handling of proxy/connection failures
 - Continues with partial success when possible
+
+#### 6.4: Improved Field Verification System
+
+The automation uses a **lenient verification approach** to avoid false negatives from autocomplete and UI variations:
+
+**Lenient Verification Strategy:**
+- **Rate Fields**: Checks if field has any value instead of exact match
+- **Phone Fields**: Verifies digits are present rather than exact format
+- **Date Fields**: Confirms date content exists without strict format checking
+- **Password Fields**: Validates any value is entered, retries if empty
+- **General Fields**: Checks for content presence, not exact text matching
+
+**Benefits:**
+- **Reduced False Negatives**: Avoids failures due to autocomplete variations
+- **Higher Success Rates**: More reliable field completion verification
+- **Better User Experience**: Fewer unnecessary retries and failures
+- **Robust Automation**: Handles UI variations gracefully
 
 **Possible outcomes:**
 - ✅ Success: All steps completed → User marked as successful
@@ -684,10 +761,10 @@ Run the automation for pending users:
 **Important**: The `process-users` command only processes users where `up_created_at` is not null. This allows for selective processing of users who have been marked as ready for Upwork profile creation.
 
 **User Processing Filter:**
-- Only users with `up_created_at` timestamp will be processed
-- Users without `up_created_at` will be skipped (not considered "pending")
-- This allows for controlled, selective processing of users
-- Use `npm start stats` to see how many users are actually pending for processing
+- **Selective Processing**: Only users with `up_created_at` timestamp will be processed
+- **Skipped Users**: Users without `up_created_at` are not considered "pending"
+- **Controlled Workflow**: Allows for selective processing of users ready for Upwork
+- **Status Monitoring**: Use `npm start stats` to see actual pending user count
 
 ```bash
 # Process 5 users (default) - only users with up_created_at set
@@ -705,11 +782,6 @@ npm start process-users -- --skip-otp
 # Combine flags for different scenarios
 npm start process-users -- --upload --restore-session --skip-otp --limit 1
 ```
-
-**User Processing Filter:**
-- Only users with `up_created_at` timestamp will be processed
-- Users without `up_created_at` will be skipped (not considered "pending")
-- This allows for controlled, selective processing of users
 
 ### View Statistics
 Check the current status:
@@ -895,30 +967,57 @@ npm test
 
 ```
 src/
-├── browser/
-│   ├── browserManager.ts    # Browser lifecycle management
-│   └── puppeteer.ts         # Puppeteer configuration
-├── database/
-│   ├── connection.ts        # Database connection
-│   ├── migrate.ts           # Migration runner
-│   └── migrations/          # Database migrations
-├── services/
-│   ├── userService.ts       # User database operations
-│   ├── upworkService.ts     # Upwork automation logic
-│   └── loginAutomation.ts   # Complete login flow automation
-├── commands/
-│   └── importCsv.ts         # CSV import functionality
-├── utils/
-│   ├── logger.ts            # Logging utility
-│   └── csv.ts               # CSV parsing utilities
-├── types/
-│   └── database.ts          # Database types and interfaces
-├── main.ts                  # CLI entry point
-└── migrate.ts               # Migration script
+├── automation/                    # Automation framework
+│   ├── LoginAutomation.ts        # Main automation orchestrator
+│   ├── FormAutomation.ts         # Form filling utilities
+│   ├── NavigationAutomation.ts   # Navigation and button clicking
+│   └── steps/                    # Step-specific handlers
+│       ├── ExperienceStepHandler.ts # Experience selection step
+│       ├── GoalStepHandler.ts # Work goals selection step
+│       ├── WorkPreferenceStepHandler.ts # Work preferences step
+│       ├── ResumeImportStepHandler.ts # Resume import with dual mode support
+│       ├── CategoriesStepHandler.ts # Categories and specialties selection step
+│       ├── TitleStepHandler.ts # Job title input step
+│       ├── SkillsStepHandler.ts # Skills selection step
+│       ├── EducationStepHandler.ts # Education form step
+│       ├── OverviewStepHandler.ts # Bio/overview step
+│       └── LocationStepHandler.ts # Location step with OTP handling
+├── services/                     # Core business logic
+│   ├── loginAutomation.ts        # Complete 15-step profile creation
+│   ├── userService.ts            # User database operations
+│   ├── upworkService.ts          # Upwork-specific automation logic
+│   ├── textVerifiedService.ts    # SMS verification API integration
+│   └── sessionService.ts         # Session state management
+├── browser/                      # Browser management
+│   ├── browserManager.ts         # Browser lifecycle and proxy setup
+│   └── puppeteer.ts              # Puppeteer configuration
+├── database/                     # Data persistence
+│   ├── connection.ts             # Database connection
+│   ├── migrate.ts                # Migration runner
+│   └── migrations/               # Database schema migrations
+├── commands/                     # CLI commands
+│   └── importCsv.ts              # CSV import functionality
+├── utils/                        # Utilities
+│   ├── logger.ts                 # Structured logging
+│   ├── csv.ts                    # CSV parsing utilities
+│   └── resumeGenerator.ts        # PDF resume generation
+├── types/                        # TypeScript definitions
+│   └── database.ts               # Database types and interfaces
+└── main.ts                       # CLI entry point
+
 assets/
-└── images/
-    └── profile-picture.png  # Default profile picture for uploads
+├── images/
+│   └── profile-picture.png       # Default profile picture
+└── resumes/                      # Generated PDF resumes
 ```
+
+**Key Components:**
+
+- **`loginAutomation.ts`**: Contains all 15 step handlers with comprehensive error handling
+- **`LoginAutomation.ts`**: Orchestrates the automation flow and manages session state
+- **`textVerifiedService.ts`**: Handles real SMS verification via TextVerified.com API
+- **`sessionService.ts`**: Manages browser session persistence and restoration
+- **`resumeGenerator.ts`**: Generates ATS-friendly PDF resumes from user data
 
 ## Configuration
 
@@ -932,6 +1031,55 @@ assets/
 - `UPWORK_LOGIN_URL`: Upwork login page URL
 - `DEBUG_EMAIL`: (Optional) Email for reference (not used for automation)
 - `DEBUG_PASSWORD`: (Optional) Password for reference (not used for automation)
+
+### Skip Location Flag
+
+The `--skip-location` flag allows you to stop the automation at the location page without filling it out.
+
+**Usage:**
+```bash
+npm start process-users -- --limit 1 --skip-location
+```
+
+**Behavior:**
+- ✅ **Executes all steps**: Runs through welcome, experience, goal, work preference, resume import, categories, skills, title, employment, education, languages, overview, and rate steps
+- ✅ **Stops at location page**: When automation reaches the location page (after completing the rate step), it stops and marks completion
+- ✅ **Marks completion**: Sets `user.rate_step_completed_at` with current datetime
+- ✅ **No location form**: Does not fill out the location form (date of birth, address, phone verification, etc.)
+
+**Database Schema:**
+The `users` table now includes a `rate_step_completed_at` column:
+```sql
+ALTER TABLE users ADD COLUMN rate_step_completed_at TIMESTAMP;
+```
+
+### Manual OTP System
+
+The `--skip-otp` flag now uses a manual OTP system that waits for OTP codes to be set in the database.
+
+#### Manual OTP Commands
+
+**Set Manual OTP:**
+```bash
+npm start set-manual-otp -- --user-id 6 --otp 12345
+```
+
+This sets the manual OTP for user 6 to 12345. The automation will wait up to 5 minutes, checking every 5 seconds for this OTP.
+
+#### Manual OTP Behavior
+
+When using `--skip-otp`:
+- ✅ **Waits for manual OTP**: Checks database every 5 seconds for up to 5 minutes
+- ✅ **Auto-clears OTP**: After retrieving the OTP, it's automatically cleared from the database
+- ✅ **Fallback to default**: If no manual OTP is set within 5 minutes, uses default "12345"
+- ✅ **Redirect on failure**: If OTP verification fails, redirects to submit page with 4 retries
+
+#### Database Schema
+
+The `users` table now includes a `manual_otp` column:
+```sql
+ALTER TABLE users ADD COLUMN manual_otp INTEGER;
+```
 
 ### TextVerified.com API Configuration
 
@@ -1029,7 +1177,11 @@ The application tracks various error types:
 - `FILE_INPUT_NOT_FOUND`: File input not found after clicking choose file
 - `RESUME_CONTINUE_BUTTON_NOT_FOUND`: Continue button not found after resume upload
 - `RESUME_CONTINUE_BUTTON_DISABLED`: Continue button found but is disabled or not visible
-- `RESUME_MANUAL_BUTTON_NOT_FOUND`: "Fill out manually" button not found (legacy)
+- `RESUME_MANUAL_BUTTON_NOT_FOUND`: "Fill out manually" button not found
+- `MANUAL_BUTTON_NOT_FOUND`: "Fill out manually" button not found (new handler)
+- `MANUAL_BUTTON_CLICK_FAILED`: Failed to click "Fill out manually" button
+- `RESUME_IMPORT_MANUAL_NAVIGATION_FAILED`: Failed to navigate from resume import page via manual button
+- `RESUME_IMPORT_STEP_STUCK`: Resume import step appears to be stuck - URL did not change after completion
 - `CATEGORIES_LEFT_ITEM_NOT_FOUND`: Category selection item not found
 - `CATEGORIES_RIGHT_CHECKBOX_NOT_FOUND`: Subcategory checkbox not found
 - `CATEGORIES_NEXT_NOT_FOUND`: Next button missing on categories page

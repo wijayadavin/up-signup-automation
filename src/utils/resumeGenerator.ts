@@ -15,6 +15,7 @@ export interface ResumeData {
   phone: string;
   location: string;
   linkedin?: string;
+  rate: string;
   professionalTitle: string;
   bio: string;
   skills: string[];
@@ -61,12 +62,19 @@ export class ResumeGenerator {
     // Format phone number with country code
     const phone = ResumeGenerator.formatPhoneNumberWithCountryCode(user.phone || '5550123456', user.country_code);
     
+    // Generate random hourly rate between $10-$20
+    const minRate = 10;
+    const maxRate = 20;
+    const randomRate = Math.floor(Math.random() * (maxRate - minRate + 1)) + minRate;
+    const rate = `$${randomRate}/hr`;
+    
     return {
       fullName: `${user.first_name} ${user.last_name}`,
       email: user.email,
       phone: phone,
       location: location,
       linkedin: undefined, // Not available in User type
+      rate: rate,
       professionalTitle: 'Full-Stack Software Engineer',
       bio: `Experienced Full-Stack Software Engineer with over 4 years of expertise in developing scalable web applications and leading development teams. Passionate about creating innovative solutions using modern technologies including React, Node.js, Python, and cloud platforms. Proven track record of delivering high-quality software products, optimizing performance, and mentoring junior developers. Strong background in database design, API development, and DevOps practices. Committed to writing clean, maintainable code and staying current with industry best practices and emerging technologies.`,
       skills: [
@@ -159,6 +167,8 @@ export class ResumeGenerator {
       doc.text(`Email: ${resumeData.email}`, 50, yPosition);
       yPosition += 15;
       doc.text(`Address: ${resumeData.location}`, 50, yPosition);
+      yPosition += 15;
+      doc.text(`Rate: ${resumeData.rate}`, 50, yPosition);
       if (resumeData.linkedin) {
         yPosition += 15;
         doc.text(`LinkedIn: ${resumeData.linkedin}`, 50, yPosition);
@@ -280,6 +290,7 @@ export class ResumeGenerator {
       resume += `Phone: ${resumeData.phone}\n`;
       resume += `Email: ${resumeData.email}\n`;
       resume += `Address: ${resumeData.location}\n`;
+      resume += `Rate: ${resumeData.rate}\n`;
       if (resumeData.linkedin) {
         resume += `LinkedIn: ${resumeData.linkedin}\n`;
       }

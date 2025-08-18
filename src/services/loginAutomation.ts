@@ -1239,41 +1239,26 @@ export class LoginAutomation {
         };
       }
 
-      logger.info('Upload modal appeared, looking for "choose file" link...');
+      logger.info('Upload modal appeared, looking for file input element...');
 
-      // Look for file input directly in the modal first
-      let fileInput = await this.page.$('input[type="file"]');
+      // Look for file input directly in the modal (it should be present but hidden)
+      let fileInput = await this.waitForSelectorWithRetry([
+        'input[type="file"]',
+        'input[accept*="pdf"]',
+        'input[accept*=".pdf"]',
+        'input[accept*=".doc"]',
+        'input[accept*=".rtf"]',
+      ], 10000);
       
+      // If still not found, try more specific selectors
       if (!fileInput) {
-        // If no file input found, look for the "choose file" link and click it
-        const chooseFileLink = await this.waitForSelectorWithRetry([
-          'a[data-ev-label="choose_file_link"]',
-          '.up-n-link:contains("choose file")',
-          'a:contains("choose file")',
-          'a:contains("Choose file")',
-          '[role="button"]:contains("choose file")',
-        ], 10000);
-
-        if (!chooseFileLink) {
-          return {
-            status: 'soft_fail',
-            stage: 'create_profile',
-            error_code: 'CHOOSE_FILE_LINK_NOT_FOUND',
-            screenshots: this.screenshots,
-            url: currentUrl,
-            evidence: 'Choose file link not found in upload modal',
-          };
-        }
-
-        logger.info('Clicking "choose file" link to trigger file input...');
-        await chooseFileLink.click();
-        await this.randomDelay(1000, 2000);
-        
-        // Look for the file input that should appear after clicking
+        logger.info('File input not found with basic selectors, trying specific modal selectors...');
         fileInput = await this.waitForSelectorWithRetry([
-          'input[type="file"]',
-          'input[accept*="pdf"]',
-          'input[accept*=".pdf"]',
+          '.air3-modal input[type="file"]',
+          '.upload-step-1 input[type="file"]',
+          '.drop-area input[type="file"]',
+          '[data-v-e7ec285a] input[type="file"]',
+          '.fe-upload-btn input[type="file"]',
         ], 5000);
       }
         
@@ -1317,20 +1302,34 @@ export class LoginAutomation {
 
       // Verify the file was uploaded by checking for the file name in the UI
       logger.info('Verifying file upload by checking for file name in UI...');
+      const expectedFileName = `resume_${this.user.id}.pdf`;
+      logger.info(`Looking for uploaded file: ${expectedFileName}`);
+      
       const fileNameElement = await this.waitForSelectorWithRetry([
-        'span.file-name:contains("resume_1.pdf")',
-        'span.ellipsis.file-name:contains("resume_1.pdf")',
-        'span[data-v-6d05ecdc].ellipsis.file-name:contains("resume_1.pdf")',
-        '.file-name:contains("resume_1.pdf")',
-        'span:contains("resume_1.pdf")',
+        '.file-name',
+        'span.file-name',
+        'span.ellipsis.file-name',
+        '.ellipsis.file-name',
+        '[class*="file-name"]',
+        '.info-container .file-name',
+        '.info-container span.ellipsis'
       ], 10000);
 
       if (fileNameElement) {
         const fileName = await fileNameElement.evaluate((el: Element) => el.textContent?.trim() || '');
         logger.info(`File upload verified: "${fileName}" found in UI`);
         
+        // Check if the filename matches what we expect
+        if (fileName === expectedFileName) {
+          logger.info(`✅ Filename matches expected: ${expectedFileName}`);
+        } else if (fileName.includes(`resume_${this.user.id}`)) {
+          logger.info(`✅ Filename contains expected pattern: ${fileName}`);
+        } else {
+          logger.warn(`⚠️ Filename "${fileName}" doesn't match expected "${expectedFileName}"`);
+        }
+        
         // Also check for upload success indicators (green checkmark, etc.)
-        const uploadSuccessIndicators = await this.page.$$('.air3-icon-check, .checkmark, [class*="success"], [class*="complete"]');
+        const uploadSuccessIndicators = await this.page.$$('[data-qa="upload-success"], .air3-icon.text-primary, .checkmark, [class*="success"], [class*="complete"]');
         if (uploadSuccessIndicators.length > 0) {
           logger.info(`Found ${uploadSuccessIndicators.length} upload success indicators`);
         }

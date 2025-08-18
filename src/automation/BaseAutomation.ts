@@ -80,8 +80,7 @@ export class BaseAutomation {
     const chars = text.split('');
     for (const char of chars) {
       await this.page.keyboard.type(char);
-      // Slower typing for better reliability, especially for passwords
-      await this.randomDelay(100, 300);
+      await this.randomDelay(30, 100);
     }
   }
 

@@ -14,7 +14,7 @@ export class SkillsStepHandler extends StepHandler {
     super(page, user, 'skills');
   }
 
-  async execute(): Promise<AutomationResult> {
+  async execute(options?: { uploadOnly?: boolean; skipOtp?: boolean; skipLocation?: boolean }): Promise<AutomationResult> {
     try {
       logger.info('Handling skills step...');
 

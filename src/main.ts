@@ -51,6 +51,13 @@ const visitLoginPageCmd = command({
       description: 'Debug mode: check login status only (no automation)',
       defaultValue: () => false,
     }),
+    noProxy: flag({
+      type: boolean,
+      long: 'no-proxy',
+      short: 'n',
+      description: 'Disable proxy testing and use direct connection',
+      defaultValue: () => false,
+    }),
   },
   handler: async (args) => {
     let upworkService: UpworkService | null = null;
@@ -63,7 +70,8 @@ const visitLoginPageCmd = command({
       
       // Initialize services
       const browserManager = new BrowserManager({ 
-        headless: args.headless
+        headless: args.headless,
+        skipProxyTest: args.noProxy
       });
       const userService = new UserService();
       upworkService = new UpworkService(browserManager, userService);
@@ -429,6 +437,18 @@ const processUsersCmd = command({
       description: 'Skip location step (except profile picture) and redirect to submit page',
       defaultValue: () => false,
     }),
+    skipLocation: flag({
+      type: boolean,
+      long: 'skip-location',
+      description: 'Skip the location page and mark rate step as completed',
+      defaultValue: () => false,
+    }),
+    step: option({
+      type: string,
+      long: 'step',
+      description: 'Force start from a specific step (e.g., "employment")',
+      defaultValue: () => '',
+    }),
   },
   handler: async (args) => {
     try {
@@ -446,6 +466,10 @@ const processUsersCmd = command({
       const upworkService = new UpworkService(browserManager, userService);
       
       // Process users
+      if (args.step) {
+        logger.info(`Force-step mode enabled: will start from "${args.step}" step`);
+      }
+
       if (args.upload) {
         logger.info('Upload mode enabled: will stop after Step 4 (Resume Import)');
         if (args.noStealth) {
@@ -460,7 +484,8 @@ const processUsersCmd = command({
         await upworkService.processPendingUsers(args.limit, { 
           uploadOnly: true,
           restoreSession: args.restoreSession,
-          skipOtp: args.skipOtp
+          skipOtp: args.skipOtp,
+          step: args.step
         });
       } else {
         if (args.noStealth) {
@@ -472,9 +497,14 @@ const processUsersCmd = command({
         if (args.skipOtp) {
           logger.info('Skip-OTP mode enabled: will skip location step except profile picture and redirect to submit page');
         }
+        if (args.skipLocation) {
+          logger.info('Skip-Location mode enabled: will skip the location page and mark rate step as completed');
+        }
         await upworkService.processPendingUsers(args.limit, {
           restoreSession: args.restoreSession,
-          skipOtp: args.skipOtp
+          skipOtp: args.skipOtp,
+          skipLocation: args.skipLocation,
+          step: args.step
         });
       }
       
@@ -673,14 +703,21 @@ const testProxyCmd = command({
       if (error instanceof Error) {
         if (error.message.includes('ERR_TUNNEL_CONNECTION_FAILED')) {
           logger.error('Proxy connection failed - check proxy credentials and server');
+          logger.warn('Continuing without proxy - automation will use direct connection');
         } else if (error.message.includes('TimeoutError')) {
           logger.error('Proxy test timed out - proxy server may be slow or unreachable');
+          logger.warn('Continuing without proxy - automation will use direct connection');
         } else if (error.message.includes('net::ERR_PROXY_AUTH_FAILED')) {
           logger.error('Proxy authentication failed - check username and password');
+          logger.warn('Continuing without proxy - automation will use direct connection');
         }
       }
       
-      process.exit(1);
+      // Continue without proxy instead of failing
+      logger.info('Proceeding with automation using direct connection (no proxy)');
+      
+      // Don't exit - continue with automation
+      // process.exit(1);
     }
   },
 });
@@ -716,6 +753,47 @@ const restoreSessionCmd = command({
       
     } catch (error) {
       logger.error(error, 'Failed to restore session');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// Set manual OTP command
+const setManualOtpCmd = command({
+  name: 'set-manual-otp',
+  description: 'Set manual OTP for a user',
+  args: {
+    userId: option({
+      type: number,
+      long: 'user-id',
+      short: 'u',
+      description: 'User ID (required)',
+    }),
+    otpCode: option({
+      type: number,
+      long: 'otp',
+      short: 'o',
+      description: 'OTP code to set (required)',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info(`Setting manual OTP ${args.otpCode} for user ${args.userId}...`);
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize Manual OTP service
+      const { ManualOtpService } = await import('./services/manualOtpService.js');
+      const manualOtpService = new ManualOtpService();
+      
+      await manualOtpService.setManualOtp(args.userId, args.otpCode);
+      logger.info(`✅ Manual OTP ${args.otpCode} set for user ${args.userId}`);
+      
+    } catch (error) {
+      logger.error(error, 'Failed to set manual OTP');
       process.exit(1);
     } finally {
       await closeDatabase();
@@ -896,7 +974,7 @@ const waitOtpCmd = command({
       long: 'timeout',
       short: 't',
       description: 'Timeout in seconds',
-      defaultValue: () => 50,
+      defaultValue: () => 180,
     }),
   },
   handler: async (args) => {
@@ -946,6 +1024,7 @@ const mainCmd = command({
     logger.info('  test-resume     - Generate and test PDF resume for a user');
     logger.info('  process-users   - Process pending users for automation');
     logger.info('  process-users --upload  - Test resume upload (Step 1-4 only)');
+    logger.info('  process-users --step employment  - Force start from employment step');
     logger.info('  stats           - Show application statistics');
     logger.info('  test-proxy      - Test proxy configuration');
     logger.info('  restore-session - Restore session and open location page');
@@ -993,6 +1072,9 @@ switch (commandName) {
     break;
   case 'wait-otp':
     await run(waitOtpCmd, commandArgs);
+    break;
+  case 'set-manual-otp':
+    await run(setManualOtpCmd, commandArgs);
     break;
   default:
     await run(mainCmd, process.argv.slice(2));

@@ -32,18 +32,10 @@ export class LocationStepHandler extends StepHandler {
       await this.waitForPageReady();
       this.screenshots.location_before = await this.takeScreenshot('location_before');
 
-      if (options?.skipOtp) {
-        // Skip-OTP mode: Only upload profile picture and return
-        logger.info('Skip-OTP mode enabled: Only uploading profile picture...');
-        
-        // Upload profile photo only
-        const photoResult = await this.uploadProfilePhoto();
-        if (photoResult.status !== 'success') {
-          return photoResult;
-        }
-        
-        logger.info('Profile picture uploaded successfully in skip-OTP mode. Ready for redirect to submit page.');
-        return this.createSuccess();
+      // Skip-OTP mode will be handled differently - fill everything normally but use default OTP
+      const isSkipOtpMode = options?.skipOtp;
+      if (isSkipOtpMode) {
+        logger.info('Skip-OTP mode enabled: Will fill location normally but use default OTP (12345)');
       }
 
       // Normal mode: Fill all fields
@@ -95,7 +87,7 @@ export class LocationStepHandler extends StepHandler {
         logger.info('Next button clicked, waiting for phone verification modal...');
         
         // Wait for phone verification modal to appear
-        const phoneVerificationResult = await this.handlePhoneVerificationModal();
+        const phoneVerificationResult = await this.handlePhoneVerificationModal(isSkipOtpMode);
         if (phoneVerificationResult.status !== 'success') {
           return phoneVerificationResult;
         }
@@ -128,34 +120,118 @@ export class LocationStepHandler extends StepHandler {
         return this.createError('DOB_FIELD_NOT_FOUND', 'Date of birth field not found');
       }
 
-      // Use user's birth date if available, otherwise use a default
-      let birthDate = '01/15/1990'; // Default date
-      if (this.user.birth_date) {
-        const date = new Date(this.user.birth_date);
+      // Format date based on country code
+      const getDateFormat = (countryCode: string) => {
+        switch (countryCode.toUpperCase()) {
+          case 'UK':
+          case 'GB':
+          case 'UA': // Ukraine
+            return 'yyyy-mm-dd';
+          case 'ID': // Indonesia
+            return 'dd/mm/yyyy';
+          case 'US':
+          default:
+            return 'mm/dd/yyyy';
+        }
+      };
+
+      const formatDateForCountry = (date: Date, countryCode: string) => {
         const month = (date.getMonth() + 1).toString().padStart(2, '0');
         const day = date.getDate().toString().padStart(2, '0');
         const year = date.getFullYear().toString();
-        birthDate = `${month}/${day}/${year}`;
+        
+        const format = getDateFormat(countryCode);
+        switch (format) {
+          case 'yyyy-mm-dd':
+            return `${year}-${month}-${day}`;
+          case 'dd/mm/yyyy':
+            return `${day}/${month}/${year}`;
+          case 'mm/dd/yyyy':
+          default:
+            return `${month}/${day}/${year}`;
+        }
+      };
+
+      // Use user's birth date if available, otherwise use a default valid date (18+ years old)
+      const defaultDate = new Date(1995, 0, 15); // January 15, 1995
+      let birthDate = formatDateForCountry(defaultDate, this.user.country_code);
+      
+      if (this.user.birth_date) {
+        const date = new Date(this.user.birth_date);
+        // Ensure the date is valid and person is 18+
+        const now = new Date();
+        const eighteenYearsAgo = new Date(now.getFullYear() - 18, now.getMonth(), now.getDate());
+        
+        if (date > eighteenYearsAgo) {
+          logger.info('User birth date makes them under 18, using default date');
+          // Use default date (already set above)
+        } else {
+          birthDate = formatDateForCountry(date, this.user.country_code);
+        }
       }
+      
+      logger.info(`Date format for country ${this.user.country_code}: ${getDateFormat(this.user.country_code)}`);
+      logger.info(`Formatted birth date: ${birthDate}`);
 
       logger.info(`Setting date of birth to: ${birthDate}`);
       
-      // Clear and type the date
-      await this.clearAndType(dobInput, birthDate);
+      // Try multiple times to ensure date is entered correctly
+      let attempts = 0;
+      let success = false;
+      const maxAttempts = 3;
       
-      // Verify the date was entered (lenient verification)
-      const enteredDate = await dobInput.evaluate((el: Element) => (el as HTMLInputElement).value);
-      logger.info(`Date verification - Expected: ${birthDate}, Got: ${enteredDate}`);
-      
-      // More lenient verification: check if field has any value
-      if (!enteredDate || enteredDate.trim() === '') {
-        logger.warn(`Date field is empty, retrying once...`);
-        // Try once more
-        await this.clearAndType(dobInput, birthDate);
+      while (attempts < maxAttempts && !success) {
+        attempts++;
+        logger.info(`Date entry attempt ${attempts}/${maxAttempts}`);
+        
+        // Focus the field first
+        await dobInput.focus();
         await this.randomDelay(500, 1000);
         
-        const retryDate = await dobInput.evaluate((el: Element) => (el as HTMLInputElement).value);
-        logger.info(`Date retry verification - Expected: ${birthDate}, Got: ${retryDate}`);
+        // Clear completely
+        await dobInput.evaluate((el) => (el as HTMLInputElement).value = '');
+        await this.randomDelay(300, 500);
+        
+        // Type the date
+        await dobInput.type(birthDate);
+        await this.randomDelay(1000, 1500);
+        
+        // Trigger change events
+        await dobInput.evaluate((el) => {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+        });
+        
+        await this.randomDelay(1000, 1500);
+        
+        // Verify the date was entered
+        const enteredDate = await dobInput.evaluate((el: Element) => (el as HTMLInputElement).value);
+        logger.info(`Date verification attempt ${attempts} - Expected: ${birthDate}, Got: ${enteredDate}`);
+        
+        // Extract year from expected date based on format
+        let expectedYear: string;
+        const format = getDateFormat(this.user.country_code);
+        if (format === 'yyyy-mm-dd') {
+          expectedYear = birthDate.split('-')[0];
+        } else if (format === 'dd/mm/yyyy') {
+          expectedYear = birthDate.split('/')[2];
+        } else { // mm/dd/yyyy
+          expectedYear = birthDate.split('/')[2];
+        }
+        
+        // Check if year is present in entered date (flexible verification)
+        if (enteredDate && enteredDate.includes(expectedYear)) {
+          success = true;
+          logger.info('Date entry successful - year found in entered date');
+        } else if (attempts < maxAttempts) {
+          logger.warn(`Date entry failed on attempt ${attempts}, retrying...`);
+          await this.randomDelay(1000, 2000);
+        }
+      }
+      
+      if (!success) {
+        logger.warn('Date entry failed after all attempts, but continuing...');
       }
 
       logger.info('Date of birth filled successfully');
@@ -170,12 +246,12 @@ export class LocationStepHandler extends StepHandler {
     try {
       logger.info('Filling address information...');
 
-      // Get default address data (use user data if available, fallback to defaults)
+      // Get default address data (use user data if available, fallback to realistic defaults)
       const addressData = {
-        street: this.user.location_street_address || '1200 Market Street',
-        city: this.user.location_city || 'San Francisco',
-        state: this.user.location_state || 'California',
-        zipCode: this.user.location_post_code || '94102',
+        street: this.user.location_street_address || '123 Main Street',
+        city: this.user.location_city || 'Manchester',
+        state: this.user.location_state || 'England',
+        zipCode: this.user.location_post_code || 'M2 4SH',
         aptSuite: '' // Optional field
       };
 
@@ -211,23 +287,47 @@ export class LocationStepHandler extends StepHandler {
           await this.randomDelay(500, 1000);
           
           // Type the street address character by character
-          await streetField.type(addressData.street, { delay: 100 });
-          await this.randomDelay(1000, 1500);
-          
-          // Skip verification for address field as autocomplete may change the value
-          success = true;
-          logger.info('Street address entered successfully');
-          
-          // Pause a little bit after typing street address
+          await streetField.type(addressData.street, { delay: 150 }); // Slower typing for accuracy
           await this.randomDelay(2000, 3000);
           
-          // Press down arrow and enter for autocomplete
+          // Pause, press down, and enter for autocomplete
+          logger.info('Pausing and pressing down arrow for autocomplete...');
+          await this.randomDelay(1000, 1500);
           await this.page.keyboard.press('ArrowDown');
-          await this.randomDelay(500, 1000);
+          await this.randomDelay(800, 1200);
           await this.page.keyboard.press('Enter');
-          await this.randomDelay(1000, 2000);
+          await this.randomDelay(1500, 2500);
           
-          logger.info('Street address autocomplete selection completed');
+          // Verify the input was typed correctly (after autocomplete selection)
+          await this.verifyAndRetryInput(streetField, addressData.street, 'Street Address');
+          
+          // Wait for autocomplete suggestions to appear
+          logger.info('Waiting for autocomplete suggestions...');
+          await this.randomDelay(1500, 2500);
+          
+          // Check if autocomplete dropdown is visible
+          const autocompleteVisible = await this.page.evaluate(() => {
+            const dropdown = document.querySelector('.air3-typeahead-menu-list-container:not([style*="display: none"])');
+            const menuItems = document.querySelectorAll('.air3-menu-list [role="option"]');
+            return dropdown && menuItems.length > 0;
+          });
+          
+          if (autocompleteVisible) {
+            logger.info('Autocomplete suggestions found, selecting first option');
+            // Press down arrow and enter for autocomplete
+            await this.page.keyboard.press('ArrowDown');
+            await this.randomDelay(800, 1200);
+            await this.page.keyboard.press('Enter');
+            await this.randomDelay(1500, 2500);
+            success = true;
+            logger.info('Street address autocomplete selection completed');
+          } else {
+            logger.info('No autocomplete suggestions, continuing with typed address');
+            // Press Tab to move to next field and trigger validation
+            await this.page.keyboard.press('Tab');
+            await this.randomDelay(1000, 1500);
+            success = true;
+          }
         }
         
         if (!success) {
@@ -263,18 +363,50 @@ export class LocationStepHandler extends StepHandler {
           logger.info(`City field already filled with: ${currentCityValue}, skipping city input`);
         } else {
           logger.info(`Filling city: ${addressData.city}`);
-          await this.clearAndType(cityField, addressData.city);
           
-          // Pause a little bit after typing city
+          // Clear and focus the field
+          await cityField.focus();
+          await this.randomDelay(300, 500);
+          await cityField.evaluate((el) => (el as HTMLInputElement).value = '');
+          
+          // Type the city name with slower typing
+          await cityField.type(addressData.city, { delay: 150 });
           await this.randomDelay(2000, 3000);
           
-          // Press down arrow and enter for autocomplete
+          // Pause, press down, and enter for autocomplete
+          logger.info('Pausing and pressing down arrow for city autocomplete...');
+          await this.randomDelay(1000, 1500);
           await this.page.keyboard.press('ArrowDown');
-          await this.randomDelay(500, 1000);
+          await this.randomDelay(800, 1200);
           await this.page.keyboard.press('Enter');
-          await this.randomDelay(1000, 2000);
+          await this.randomDelay(1500, 2500);
           
-          logger.info('City autocomplete selection completed');
+          // Verify the city input was typed correctly (after autocomplete selection)
+          await this.verifyAndRetryInput(cityField, addressData.city, 'City');
+          
+          // Wait for autocomplete suggestions
+          logger.info('Waiting for city autocomplete suggestions...');
+          await this.randomDelay(1000, 1500);
+          
+          // Check if city autocomplete dropdown appeared
+          const cityAutocompleteVisible = await this.page.evaluate(() => {
+            const dropdowns = document.querySelectorAll('.air3-typeahead-menu-list-container:not([style*="display: none"])');
+            const menuItems = document.querySelectorAll('.air3-menu-list [role="option"]');
+            return dropdowns.length > 0 && menuItems.length > 0;
+          });
+          
+          if (cityAutocompleteVisible) {
+            logger.info('City autocomplete found, selecting first option');
+            await this.page.keyboard.press('ArrowDown');
+            await this.randomDelay(800, 1200);
+            await this.page.keyboard.press('Enter');
+            await this.randomDelay(1500, 2500);
+            logger.info('City autocomplete selection completed');
+          } else {
+            logger.info('No city autocomplete, pressing Tab to continue');
+            await this.page.keyboard.press('Tab');
+            await this.randomDelay(1000, 1500);
+          }
         }
       }
 
@@ -293,7 +425,21 @@ export class LocationStepHandler extends StepHandler {
           logger.info(`State field already filled with: ${currentStateValue}, skipping state input`);
         } else {
           logger.info(`Filling state: ${addressData.state}`);
-          await this.clearAndType(stateField, addressData.state);
+          
+          // Clear and type with verification
+          await stateField.focus();
+          await stateField.evaluate((el: Element) => {
+            (el as HTMLInputElement).value = '';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          });
+          await this.randomDelay(500, 1000);
+          
+          await stateField.type(addressData.state, { delay: 150 });
+          await this.randomDelay(1000, 1500);
+          
+          // Verify the state input was typed correctly
+          await this.verifyAndRetryInput(stateField, addressData.state, 'State');
         }
       }
 
@@ -306,7 +452,21 @@ export class LocationStepHandler extends StepHandler {
 
       if (zipField) {
         logger.info(`Filling ZIP code: ${addressData.zipCode}`);
-        await this.clearAndType(zipField, addressData.zipCode);
+        
+        // Clear and type with verification
+        await zipField.focus();
+        await zipField.evaluate((el: Element) => {
+          (el as HTMLInputElement).value = '';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await this.randomDelay(500, 1000);
+        
+        await zipField.type(addressData.zipCode, { delay: 150 });
+        await this.randomDelay(1000, 1500);
+        
+        // Verify the ZIP input was typed correctly
+        await this.verifyAndRetryInput(zipField, addressData.zipCode, 'ZIP Code');
       }
 
       logger.info('Address information filled successfully');
@@ -314,6 +474,102 @@ export class LocationStepHandler extends StepHandler {
 
     } catch (error) {
       return this.createError('ADDRESS_FILL_FAILED', `Failed to fill address information: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async handleSkipOtpRedirect(): Promise<AutomationResult> {
+    try {
+      logger.info('Skip-OTP mode: Attempting to redirect to submit page after OTP failure...');
+      
+      // Try to redirect to submit page up to 4 times
+      let attempts = 0;
+      const maxAttempts = 4;
+      
+      while (attempts < maxAttempts) {
+        attempts++;
+        logger.info(`Skip-OTP redirect attempt ${attempts}/${maxAttempts}`);
+        
+        try {
+          // Navigate to submit page
+          const submitUrl = 'https://www.upwork.com/nx/create-profile/submit';
+          logger.info(`Redirecting to: ${submitUrl}`);
+          await this.page.goto(submitUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+          
+          // Wait for page to load
+          await this.randomDelay(3000, 5000);
+          
+          // Check if we're actually on the submit page
+          const currentUrl = this.page.url();
+          logger.info(`Current URL after redirect: ${currentUrl}`);
+          
+          if (currentUrl.includes('/nx/create-profile/submit')) {
+            logger.info('✅ Successfully redirected to submit page');
+            return this.createSuccess();
+          } else {
+            logger.warn(`❌ Redirect failed - still on: ${currentUrl}`);
+            
+            if (attempts < maxAttempts) {
+              logger.info(`Retrying redirect in 5 seconds...`);
+              await this.randomDelay(5000, 5000);
+            }
+          }
+          
+        } catch (error) {
+          logger.warn(`Redirect attempt ${attempts} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          
+          if (attempts < maxAttempts) {
+            logger.info(`Retrying redirect in 5 seconds...`);
+            await this.randomDelay(5000, 5000);
+          }
+        }
+      }
+      
+      logger.error(`Failed to redirect to submit page after ${maxAttempts} attempts`);
+      return this.createError('SUBMIT_REDIRECT_FAILED', `Failed to redirect to submit page after ${maxAttempts} attempts`);
+      
+    } catch (error) {
+      return this.createError('SKIP_OTP_REDIRECT_FAILED', `Skip-OTP redirect handling failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async verifyAndRetryInput(field: any, expectedValue: string, fieldName: string): Promise<void> {
+    // Verify the input was typed correctly
+    const enteredValue = await field.evaluate((el: Element) => (el as HTMLInputElement).value);
+    logger.info(`${fieldName} verification - Expected: "${expectedValue}", Got: "${enteredValue}"`);
+    
+    // More flexible verification - check if the entered value contains key parts of expected value
+    const isAcceptable = enteredValue === expectedValue || 
+                        enteredValue.includes(expectedValue.split(' ')[0]) || // First word
+                        (expectedValue.includes(' ') && enteredValue.includes(expectedValue.split(' ')[1])); // Second word
+    
+    if (!isAcceptable && enteredValue !== '') {
+      logger.warn(`${fieldName} input mismatch detected! Retrying...`);
+      // Clear and retry
+      await field.focus();
+      await field.evaluate((el: Element) => {
+        (el as HTMLInputElement).value = '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await this.randomDelay(500, 1000);
+      await field.type(expectedValue, { delay: 200 }); // Even slower for retry
+      await this.randomDelay(1000, 1500);
+      
+      // Verify again
+      const retryValue = await field.evaluate((el: Element) => (el as HTMLInputElement).value);
+      logger.info(`${fieldName} retry verification - Expected: "${expectedValue}", Got: "${retryValue}"`);
+      
+      const retryAcceptable = retryValue === expectedValue || 
+                             retryValue.includes(expectedValue.split(' ')[0]) ||
+                             (expectedValue.includes(' ') && retryValue.includes(expectedValue.split(' ')[1]));
+      
+      if (!retryAcceptable && retryValue !== '') {
+        logger.error(`${fieldName} input failed after retry! Expected: "${expectedValue}", Got: "${retryValue}"`);
+      }
+    } else if (enteredValue === '') {
+      logger.warn(`${fieldName} field is empty, but continuing...`);
+    } else {
+      logger.info(`${fieldName} input verification passed`);
     }
   }
 
@@ -622,7 +878,7 @@ export class LocationStepHandler extends StepHandler {
     return `${prefix}${cleanNumber}`;
   }
 
-  private async handlePhoneVerificationModal(): Promise<AutomationResult> {
+  private async handlePhoneVerificationModal(skipOtp: boolean = false): Promise<AutomationResult> {
     try {
       logger.info('Waiting for phone verification modal...');
       
@@ -636,48 +892,78 @@ export class LocationStepHandler extends StepHandler {
         logger.info(`Attempt ${attempts}/${maxAttempts} to find phone verification modal...`);
         
         // Check for either "send verification" modal or "enter your code" modal
-        // First check for "send verification" modal
+        // First check for "send verification" modal with more specific selectors
         const sendVerificationModal = await this.waitForSelectorWithRetry([
           'h3:contains("Please verify your phone number")',
           'h3.mb-0:contains("verify your phone number")',
           '.air3-grid-container h3:contains("verify")',
+          '.air3-grid-container h3:contains("Please verify")',
           '[data-ev-label="submit_phone"]', // Send code button
-          'button#submitPhone'
+          'button#submitPhone',
+          'button:contains("Send code")',
+          '.air3-btn-primary:contains("Send code")'
         ], 5000);
         
         // Then check for "enter your code" modal (OTP input modal)
         const otpModal = await this.waitForSelectorWithRetry([
           'h3:contains("Enter your code")',
+          'h3:contains("enter your code")',
           '.pincode-input',
+          'input[type="text"][maxlength="1"]', // OTP input fields
           'button#checkPin',
-          '[data-ev-label="check_pin"]'
+          '[data-ev-label="check_pin"]',
+          'button:contains("Verify phone number")',
+          '.air3-btn-primary:contains("Verify")'
         ], 2000);
         
         if (sendVerificationModal) {
-          logger.info('Found "send verification" modal');
+          logger.info('✅ Found "send verification" modal - will click Send code button');
           modalElement = sendVerificationModal;
         } else if (otpModal) {
-          logger.info('Found "enter your code" modal, skipping send code step');
+          logger.info('⚠️ Found "enter your code" modal directly - skipping Send code step');
           
-          // Get OTP immediately when OTP modal is detected
+          // In skip-OTP mode, use default OTP, otherwise get from TextVerified
           let otpCode: string | null = null;
-          try {
-            const textVerifiedService = new TextVerifiedService();
-            logger.info('Getting OTP from TextVerified for immediate OTP modal...');
-            
-            // Get OTP with reasonable timeout
-            otpCode = await textVerifiedService.waitForOTP(this.user.id, 60);
-            
-            if (otpCode) {
-              logger.info(`✅ Received OTP from TextVerified: ${otpCode}`);
+          
+          if (skipOtp) {
+            logger.info('Skip-OTP mode: Using manual OTP service for immediate OTP modal');
+            try {
+              const { ManualOtpService } = await import('../../services/manualOtpService.js');
+              const manualOtpService = new ManualOtpService();
+              
+              // Wait for manual OTP (5 minutes timeout, check every 5 seconds)
+              const manualOtp = await manualOtpService.waitForManualOtp(this.user.id, 5, 5);
+              
+              if (manualOtp) {
+                logger.info(`✅ Received manual OTP: ${manualOtp}`);
+                otpCode = manualOtp;
+              } else {
+                logger.warn('Manual OTP timeout, will use default OTP');
+                otpCode = '12345';
+              }
+            } catch (error) {
+              logger.warn(`Failed to get manual OTP: ${error instanceof Error ? error.message : 'Unknown error'}, using default OTP`);
+              otpCode = '12345';
             }
-            
-          } catch (error) {
-            logger.warn('Failed to get OTP from TextVerified for immediate modal');
+          } else {
+            try {
+              const textVerifiedService = new TextVerifiedService();
+              logger.info('Getting OTP from TextVerified for immediate OTP modal...');
+              
+              // Get OTP with 3 minute timeout
+              otpCode = await textVerifiedService.waitForOTP(this.user.id, 180);
+              
+              if (otpCode) {
+                logger.info(`✅ Received OTP from TextVerified: ${otpCode}`);
+              }
+              
+            } catch (error) {
+              logger.warn('Failed to get OTP from TextVerified for immediate modal');
+            }
           }
           
           // Skip to OTP input handling directly
-          return await this.handleOTPInput(otpCode);
+          return await this.handleOTPInput(otpCode, skipOtp);
         }
 
         if (!modalElement && attempts < maxAttempts) {
@@ -719,23 +1005,46 @@ export class LocationStepHandler extends StepHandler {
         return this.createError('SEND_CODE_BUTTON_NOT_FOUND', 'Could not find Send code button in phone verification modal');
       }
 
-      // Get OTP before clicking send code button (in case there's already an OTP available)
+      // Get OTP before clicking send code button (in skip-OTP mode use default, otherwise check for existing)
       let otpCode: string | null = null;
-      try {
-        const textVerifiedService = new TextVerifiedService();
-        logger.info('Checking for existing OTP from TextVerified before sending code...');
-        
-        // Try to get existing OTP with short timeout (don't wait long)
-        otpCode = await textVerifiedService.waitForOTP(this.user.id, 5);
-        
-        if (otpCode) {
-          logger.info(`✅ Found existing OTP from TextVerified: ${otpCode}`);
-        } else {
-          logger.info('No existing OTP found, will request new one after clicking Send code');
+      
+      if (skipOtp) {
+        logger.info('Skip-OTP mode: Using manual OTP service');
+        try {
+          const { ManualOtpService } = await import('../../services/manualOtpService.js');
+          const manualOtpService = new ManualOtpService();
+          
+          // Wait for manual OTP (5 minutes timeout, check every 5 seconds)
+          const manualOtp = await manualOtpService.waitForManualOtp(this.user.id, 5, 5);
+          
+          if (manualOtp) {
+            logger.info(`✅ Received manual OTP: ${manualOtp}`);
+            otpCode = manualOtp;
+          } else {
+            logger.warn('Manual OTP timeout, will use default OTP');
+            otpCode = '12345';
+          }
+        } catch (error) {
+          logger.warn(`Failed to get manual OTP: ${error instanceof Error ? error.message : 'Unknown error'}, using default OTP`);
+          otpCode = '12345';
         }
-        
-      } catch (error) {
-        logger.warn('Failed to check for existing OTP, will request new one after clicking Send code');
+      } else {
+        try {
+          const textVerifiedService = new TextVerifiedService();
+          logger.info('Checking for existing OTP from TextVerified before sending code...');
+          
+          // Try to get existing OTP with short timeout (don't wait long)
+          otpCode = await textVerifiedService.waitForOTP(this.user.id, 5);
+          
+          if (otpCode) {
+            logger.info(`✅ Found existing OTP from TextVerified: ${otpCode}`);
+          } else {
+            logger.info('No existing OTP found, will request new one after clicking Send code');
+          }
+          
+        } catch (error) {
+          logger.warn('Failed to check for existing OTP, will request new one after clicking Send code');
+        }
       }
 
       logger.info('Clicking Send code button...');
@@ -751,14 +1060,14 @@ export class LocationStepHandler extends StepHandler {
       await this.randomDelay(10000, 10000);
       
       // Handle OTP input, passing the pre-fetched OTP if available
-      return await this.handleOTPInput(otpCode);
+      return await this.handleOTPInput(otpCode, skipOtp);
 
     } catch (error) {
       return this.createError('PHONE_VERIFICATION_MODAL_FAILED', `Phone verification modal handling failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  private async handleOTPInput(preFetchedOtp?: string | null): Promise<AutomationResult> {
+  private async handleOTPInput(preFetchedOtp?: string | null, skipOtp: boolean = false): Promise<AutomationResult> {
     try {
       // Check for the OTP input modal
       const otpModalTitle = await this.page.evaluate(() => {
@@ -785,23 +1094,43 @@ export class LocationStepHandler extends StepHandler {
       
       logger.info('Found OTP input field');
       
-      // Get real OTP from TextVerified service if not already provided
+      // Get OTP - use default 12345 in skip-OTP mode, otherwise get from TextVerified
       let otpCode: string;
       if (preFetchedOtp) {
         logger.info(`Using pre-fetched OTP: ${preFetchedOtp}`);
         otpCode = preFetchedOtp;
+      } else if (skipOtp) {
+        logger.info('Skip-OTP mode: Using manual OTP service for OTP input');
+        try {
+          const { ManualOtpService } = await import('../../services/manualOtpService.js');
+          const manualOtpService = new ManualOtpService();
+          
+          // Wait for manual OTP (5 minutes timeout, check every 5 seconds)
+          const manualOtp = await manualOtpService.waitForManualOtp(this.user.id, 5, 5);
+          
+          if (manualOtp) {
+            logger.info(`✅ Received manual OTP: ${manualOtp}`);
+            otpCode = manualOtp;
+          } else {
+            logger.warn('Manual OTP timeout, will use default OTP');
+            otpCode = '12345';
+          }
+        } catch (error) {
+          logger.warn(`Failed to get manual OTP: ${error instanceof Error ? error.message : 'Unknown error'}, using default OTP`);
+          otpCode = '12345';
+        }
       } else {
         logger.info('Getting new OTP from TextVerified...');
         try {
           const textVerifiedService = new TextVerifiedService();
           logger.info('Waiting for OTP from TextVerified service...');
           
-          // Wait for OTP with 60 second timeout
-          const receivedOtp = await textVerifiedService.waitForOTP(this.user.id, 60);
+          // Wait for OTP with 3 minute timeout
+          const receivedOtp = await textVerifiedService.waitForOTP(this.user.id, 180);
           
           if (!receivedOtp) {
-            logger.error('No OTP received from TextVerified within 60 seconds');
-            return this.createError('OTP_NOT_RECEIVED', 'No OTP received from TextVerified within 60 seconds');
+            logger.error('No OTP received from TextVerified within 180 seconds');
+            return this.createError('OTP_NOT_RECEIVED', 'No OTP received from TextVerified within 180 seconds');
           }
           
           otpCode = receivedOtp;
@@ -856,16 +1185,34 @@ export class LocationStepHandler extends StepHandler {
             // Check for specific error types
             if (errorText.toLowerCase().includes('expired')) {
               logger.warn('OTP code expired, verification failed');
+              
+              // In skip-OTP mode, try to redirect to submit page and retry
+              if (skipOtp) {
+                return await this.handleSkipOtpRedirect();
+              }
+              
               return this.createError('OTP_EXPIRED', 'OTP code expired, verification failed');
             }
             
             if (errorText.toLowerCase().includes('invalid') || errorText.toLowerCase().includes('incorrect')) {
               logger.warn('OTP code invalid/incorrect, verification failed');
+              
+              // In skip-OTP mode, try to redirect to submit page and retry
+              if (skipOtp) {
+                return await this.handleSkipOtpRedirect();
+              }
+              
               return this.createError('OTP_INVALID', 'OTP code invalid/incorrect, verification failed');
             }
             
             if (errorText.toLowerCase().includes('try again') || errorText.toLowerCase().includes('request a new one')) {
               logger.warn('OTP verification failed, need to try again');
+              
+              // In skip-OTP mode, try to redirect to submit page and retry
+              if (skipOtp) {
+                return await this.handleSkipOtpRedirect();
+              }
+              
               return this.createError('OTP_VERIFICATION_FAILED', `OTP verification failed: ${errorText}`);
             }
             

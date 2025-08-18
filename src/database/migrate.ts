@@ -7,6 +7,8 @@ import * as migration004 from './migrations/004_add_birth_date.js';
 import * as migration005 from './migrations/005_add_phone.js';
 import * as migration006 from './migrations/006_add_onboarding_and_session.js';
 import * as migration007 from './migrations/007_add_up_created_at.js';
+import * as migration008 from './migrations/008_add_manual_otp.js';
+import * as migration009 from './migrations/009_add_rate_step_completed.js';
 
 const logger = getLogger(import.meta.url);
 
@@ -17,7 +19,9 @@ const migrations = [
   { name: '004_add_birth_date', up: migration004.up, down: migration004.down },
   { name: '005_add_phone', up: migration005.up, down: migration005.down },
   { name: '006_add_onboarding_and_session', up: migration006.up, down: migration006.down },
-  { name: '007_add_up_created_at', up: migration007.up, down: migration007.down }
+  { name: '007_add_up_created_at', up: migration007.up, down: migration007.down },
+  { name: '008_add_manual_otp', up: migration008.up, down: migration008.down },
+  { name: '009_add_rate_step_completed', up: migration009.up, down: migration009.down }
 ];
 
 export async function runMigrations(): Promise<void> {

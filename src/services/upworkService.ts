@@ -1,7 +1,8 @@
 import { BrowserManager } from '../browser/browserManager.js';
 import { UserService } from './userService.js';
 import { getLogger } from '../utils/logger.js';
-import { LoginAutomation, type LoginResult } from '../automation/LoginAutomation.js';
+import { LoginAutomation as AutomationLoginAutomation, type LoginResult } from '../automation/LoginAutomation.js';
+import { LoginAutomation as ServicesLoginAutomation, type LoginResult as ServicesLoginResult } from '../services/loginAutomation.js';
 import type { User } from '../types/database.js';
 import type { Page } from 'puppeteer';
 
@@ -263,7 +264,7 @@ export class UpworkService {
     }
   }
 
-  async processUser(user: User, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean }): Promise<{
+  async processUser(user: User, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string }): Promise<{
     success: boolean;
     errorCode?: string;
     errorMessage?: string;
@@ -304,8 +305,21 @@ export class UpworkService {
         }, 'Starting automation with current IP');
       }
       
-      const loginAutomation = new LoginAutomation(page, user, userBrowserManager);
-      const loginResult = await loginAutomation.execute(options);
+      // Decide which automation implementation to use
+      // Use automation wrapper only for specific session/OTP features
+      // For upload functionality, use comprehensive services automation
+      const useAutomationWrapper = Boolean(options?.restoreSession || options?.skipOtp);
+      let loginResult: LoginResult | ServicesLoginResult;
+
+      if (useAutomationWrapper) {
+        logger.info({ userId: user.id }, 'Using automation wrapper (session/OTP features)');
+        const loginAutomation = new AutomationLoginAutomation(page, user, userBrowserManager);
+        loginResult = await loginAutomation.execute(options);
+      } else {
+        logger.info({ userId: user.id }, 'Using comprehensive services automation (full step handling)');
+        const loginAutomation = new ServicesLoginAutomation(page, user);
+        loginResult = await loginAutomation.execute({ uploadOnly: options?.uploadOnly });
+      }
 
       // Log the result
       logger.info({ 
@@ -409,7 +423,7 @@ export class UpworkService {
     }
   }
 
-  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean }): Promise<void> {
+  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string }): Promise<void> {
     try {
       const users = await this.userService.getPendingUsers(limit);
       
