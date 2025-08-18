@@ -5,6 +5,8 @@ import { FormAutomation } from './FormAutomation';
 import { NavigationAutomation } from './NavigationAutomation';
 import { SkillsStepHandler } from './steps/SkillsStepHandler';
 import { EducationStepHandler } from './steps/EducationStepHandler';
+import { LanguagesStepHandler } from './steps/LanguagesStepHandler';
+import { RateStepHandler } from './steps/RateStepHandler';
 import { OverviewStepHandler } from './steps/OverviewStepHandler';
 import { LocationStepHandler } from './steps/LocationStepHandler';
 import { ExperienceStepHandler } from './steps/ExperienceStepHandler';
@@ -30,7 +32,7 @@ const logger = {
 // Legacy interface for backward compatibility
 export interface LoginResult {
   status: 'success' | 'soft_fail' | 'hard_fail';
-  stage: 'email' | 'password' | 'create_profile' | 'employment_saved' | 'done';
+  stage: 'email' | 'password' | 'create_profile' | 'employment_saved' | 'done' | 'rate_completed';
   error_code?: string;
   screenshots: Record<string, string>;
   url: string;
@@ -60,7 +62,9 @@ export class LoginAutomation extends BaseAutomation {
       ['employment', new EmploymentStepHandler(page, user)],
       ['skills', new SkillsStepHandler(page, user)],
       ['education', new EducationStepHandler(page, user)],
+      ['languages', new LanguagesStepHandler(page, user)],
       ['overview', new OverviewStepHandler(page, user)],
+      ['rate', new RateStepHandler(page, user)],
       ['location', new LocationStepHandler(page, user)],
       // Add more step handlers as they are created
     ]);
@@ -202,7 +206,7 @@ export class LoginAutomation extends BaseAutomation {
       try {
         await this.page.goto('https://www.upwork.com', {
           waitUntil: 'networkidle2',
-          timeout: 60000, // Increased timeout to 60 seconds for session restoration
+          timeout: 7000,
         });
         
         // Wait for page to load
@@ -585,7 +589,7 @@ export class LoginAutomation extends BaseAutomation {
           if (newStep === 'location' || currentUrl.includes('/nx/create-profile/location')) {
             logger.info('Skip-Location mode: redirected to location page after rate step, marking as completed');
             await this.markRateStepCompleted();
-      return this.createSuccess('done');
+            return this.createSuccess('rate_completed');
           }
         }
         

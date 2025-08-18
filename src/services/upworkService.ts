@@ -339,14 +339,24 @@ export class UpworkService {
 
       // Handle different result types
       if (loginResult.status === 'success') {
-        await this.userService.updateUserSuccess(user.id, {
-          success_at: new Date(),
-        });
-        logger.info({ userId: user.id }, 'User processed successfully');
-        return { 
-          success: true,
-          loginResult 
-        };
+        // Check if this is a rate_completed status (skipLocation mode)
+        if (loginResult.stage === 'rate_completed') {
+          logger.info({ userId: user.id }, 'Rate step completed (skipLocation mode) - not marking as full success');
+          return { 
+            success: true,
+            loginResult 
+          };
+        } else {
+          // Full profile completion
+          await this.userService.updateUserSuccess(user.id, {
+            success_at: new Date(),
+          });
+          logger.info({ userId: user.id }, 'User processed successfully');
+          return { 
+            success: true,
+            loginResult 
+          };
+        }
       } else if (loginResult.status === 'soft_fail') {
         // Handle special case for suspicious login - flag user for captcha
         if (loginResult.error_code === 'SUSPICIOUS_LOGIN') {

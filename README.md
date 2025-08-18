@@ -531,7 +531,8 @@ The automation handles the full 15-step Upwork profile creation process using co
 The automation uses a comprehensive, battle-tested architecture with multiple layers of robustness:
 
 **Comprehensive Step Handlers:**
-- **Location**: `src/services/loginAutomation.ts` contains all step implementations
+- **Modular Architecture**: Each step has its own dedicated handler class in `src/automation/steps/`
+- **Base Class**: All handlers extend `StepHandler` for consistent behavior
 - **Battle-Tested**: Each step has been extensively tested and refined
 - **Error Handling**: Comprehensive error detection and recovery mechanisms
 - **Fallback Strategies**: Multiple selector strategies with text-based fallbacks
@@ -980,7 +981,9 @@ src/
 │       ├── TitleStepHandler.ts # Job title input step
 │       ├── SkillsStepHandler.ts # Skills selection step
 │       ├── EducationStepHandler.ts # Education form step
+│       ├── LanguagesStepHandler.ts # Languages proficiency step
 │       ├── OverviewStepHandler.ts # Bio/overview step
+│       ├── RateStepHandler.ts # Rate setting step
 │       └── LocationStepHandler.ts # Location step with OTP handling
 ├── services/                     # Core business logic
 │   ├── loginAutomation.ts        # Complete 15-step profile creation
