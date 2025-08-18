@@ -92,10 +92,12 @@ export class BaseAutomation {
   // Navigation utilities
   protected async waitForNavigation(): Promise<void> {
     try {
-      await this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 });
+      logger.debug('Waiting for navigation with 15 second timeout...');
+      await this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 });
+      logger.debug('Navigation completed successfully');
     } catch (error) {
       // Navigation might have already completed
-      logger.debug('Navigation timeout, continuing...');
+      logger.debug(`Navigation timeout after 15 seconds: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

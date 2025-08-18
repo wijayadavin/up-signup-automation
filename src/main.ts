@@ -25,10 +25,11 @@ const visitLoginPageCmd = command({
   description: 'Visit the Upwork login page',
   args: {
     userId: option({
-      type: number,
+      type: string,
       long: 'user-id',
       short: 'u',
       description: 'User ID to use for the session (optional)',
+      defaultValue: () => '',
     }),
     headless: flag({
       type: boolean,
@@ -76,14 +77,17 @@ const visitLoginPageCmd = command({
       const userService = new UserService();
       upworkService = new UpworkService(browserManager, userService);
       
+      // Parse user ID if provided
+      const userId = args.userId ? parseInt(args.userId, 10) : undefined;
+      
       // Visit login page
-      logger.info(`User ID: ${args.userId || 'none'}, Keep open mode: ${args.keepOpen}, Debug mode: ${args.debug}`);
+      logger.info(`User ID: ${userId || 'none'}, Keep open mode: ${args.keepOpen}, Debug mode: ${args.debug}`);
       
       let success: boolean;
       if (args.debug) {
-        success = await upworkService.checkLoginStatus(args.keepOpen, args.userId);
+        success = await upworkService.checkLoginStatus(args.keepOpen, userId);
       } else {
-        success = await upworkService.visitLoginPage(args.keepOpen, args.userId);
+        success = await upworkService.visitLoginPage(args.keepOpen, userId);
       }
       
       if (success) {
@@ -1050,6 +1054,16 @@ const mainCmd = command({
 // Create a simple command runner
 const commandName = process.argv[2];
 const commandArgs = process.argv.slice(3);
+
+// Handle the case where arguments might be passed incorrectly
+if (commandName === 'visit-login' && commandArgs.length > 0 && !commandArgs[0].startsWith('-')) {
+  // If first argument is not a flag, treat it as user-id
+  const userId = parseInt(commandArgs[0]);
+  if (!isNaN(userId)) {
+    commandArgs[0] = '--user-id';
+    commandArgs.splice(1, 0, userId.toString());
+  }
+}
 
 switch (commandName) {
   case 'visit-login':

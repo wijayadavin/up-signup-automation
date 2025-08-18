@@ -1,5 +1,6 @@
 import { StepHandler } from '../StepHandler.js';
 import { AutomationResult } from '../BaseAutomation.js';
+import { ElementHandle } from 'puppeteer';
 
 const logger = {
   info: (message: string, ...args: any[]) => console.log(`[INFO] ${message}`, ...args),
@@ -50,6 +51,10 @@ export class TitleStepHandler extends StepHandler {
     try {
       logger.info('Attempting to fill title field...');
 
+      // Get the job title to enter
+      const jobTitle = this.getJobTitle();
+      logger.info(`Job title to enter: "${jobTitle}"`);
+
       // Multiple strategies to find the title input field
       const titleInputSelectors = [
         // Primary: Target by aria-labelledby attribute
@@ -74,95 +79,98 @@ export class TitleStepHandler extends StepHandler {
         'input[type="text"]'
       ];
 
-      let titleInput = null;
-      let selectionMethod = '';
-
-      // Try to find the title input using the selectors in order
-      for (let i = 0; i < titleInputSelectors.length; i++) {
-        const selector = titleInputSelectors[i];
-        logger.info(`Trying selector ${i + 1}/${titleInputSelectors.length}: ${selector}`);
-        
-        try {
-          const inputElement = await this.page.$(selector);
-          if (inputElement) {
-            titleInput = inputElement;
-            const placeholder = await inputElement.evaluate((el: Element) => 
-              (el as HTMLInputElement).placeholder || ''
-            );
-            
-            selectionMethod = `Found title input via selector ${i + 1}: ${selector} (placeholder: "${placeholder}")`;
-            logger.info(selectionMethod);
-            break;
-          }
-        } catch (error) {
-          logger.warn(`Selector ${selector} failed: ${error}`);
-          continue;
-        }
-      }
-
-      if (!titleInput) {
-        logger.warn('No title input found, will try fallback navigation...');
-        return this.createError('TITLE_INPUT_NOT_FOUND', 'Title input field not found');
-      }
-
-      logger.info(`Selection method: ${selectionMethod}`);
-
-      // Step 1: Click on the input field to focus it
-      logger.info('Clicking on title input field...');
-      await this.clickElement(titleInput);
-      await this.randomDelay(500, 1000);
-
-      // Step 2: Clear the field using keyboard shortcuts
-      logger.info('Clearing title input field...');
-      await this.page.keyboard.down('Control');
-      await this.page.keyboard.press('KeyA');
-      await this.page.keyboard.up('Control');
-      await this.page.keyboard.press('Backspace');
-      await this.randomDelay(500, 1000);
-
-      // Step 3: Type the job title
-      const jobTitle = this.getJobTitle();
-      logger.info(`Typing job title: "${jobTitle}"`);
+      // Use the robust fillField method from FormAutomation
+      const fillResult = await this.formAutomation.fillField(titleInputSelectors, jobTitle, 'title');
       
-      // Strategy 1: Type with human-like delays
-      logger.info('Strategy 1: Human-like typing...');
-      await this.typeHumanLike(jobTitle);
-      await this.randomDelay(1000, 2000);
+      if (fillResult.status === 'success') {
+        logger.info('Title field filled successfully using FormAutomation.fillField');
+        return fillResult;
+      }
 
-      // Strategy 2: JavaScript set value as fallback
-      logger.info('Strategy 2: JavaScript set value...');
+      // If FormAutomation.fillField failed, try manual approach with verification
+      logger.warn('FormAutomation.fillField failed, trying manual approach...');
+      
+      const titleInput = await this.waitForSelectorWithRetry(titleInputSelectors, 10000);
+      if (!titleInput) {
+        return this.createError('TITLE_INPUT_NOT_FOUND', 'Title input field not found after 10 seconds');
+      }
+
+      // Try manual typing with verification
+      const typingResult = await this.typeWithVerification(titleInput, jobTitle, 'title');
+      if (typingResult) {
+        logger.info('Title field filled successfully using manual typing with verification');
+        return this.createSuccess();
+      }
+
+      // Final fallback: try JavaScript set value
+      logger.warn('Manual typing failed, trying JavaScript set value...');
       await titleInput.evaluate((el: Element, value: string) => {
         const input = el as HTMLInputElement;
         input.value = value;
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
       }, jobTitle);
-      await this.randomDelay(1000, 2000);
-
-      // Step 4: Verify the title was entered correctly
-      const enteredValue = await titleInput.evaluate((el: Element) => 
-        (el as HTMLInputElement).value
-      );
       
-      if (enteredValue === jobTitle) {
-        logger.info(`✅ Title entered successfully: "${enteredValue}"`);
+      await this.randomDelay(1000, 2000);
+      
+      // Verify the final result
+      const finalValue = await titleInput.evaluate((el: Element) => (el as HTMLInputElement).value);
+      if (finalValue === jobTitle) {
+        logger.info(`✅ Title entered successfully via JavaScript: "${finalValue}"`);
+        return this.createSuccess();
       } else {
-        logger.warn(`⚠️ Title verification failed. Expected: "${jobTitle}", Got: "${enteredValue}"`);
-        // Try one more time with JavaScript
-        await titleInput.evaluate((el: Element, value: string) => {
-          const input = el as HTMLInputElement;
-          input.value = value;
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-        }, jobTitle);
-        await this.randomDelay(500, 1000);
+        logger.warn(`⚠️ Final verification failed. Expected: "${jobTitle}", Got: "${finalValue}"`);
+        return this.createError('TITLE_ENTRY_FAILED', `Failed to enter title correctly. Expected: "${jobTitle}", Got: "${finalValue}"`);
       }
 
-      return this.createSuccess();
-
     } catch (error) {
-      logger.warn(`Failed to fill title field: ${error}, will try fallback navigation...`);
+      logger.warn(`Failed to fill title field: ${error}`);
       return this.createError('TITLE_INPUT_NOT_FOUND', `Failed to fill title field: ${error}`);
+    }
+  }
+
+  private async typeWithVerification(element: ElementHandle<Element>, text: string, fieldName: string): Promise<boolean> {
+    try {
+      logger.info(`Attempting to type "${text}" into ${fieldName} field with verification...`);
+      
+      // Focus the element first
+      await element.focus();
+      await this.randomDelay(300, 500);
+      
+      // Clear the field using the existing clearAndType method
+      await this.clearAndType(element, text);
+      
+      // Wait for typing to complete
+      await this.randomDelay(500, 1000);
+      
+      // Verify the typing was successful
+      const enteredValue = await element.evaluate((el: Element) => (el as HTMLInputElement).value);
+      
+      if (enteredValue === text) {
+        logger.info(`✅ ${fieldName} typing verification successful: "${enteredValue}"`);
+        return true;
+      } else {
+        logger.warn(`⚠️ ${fieldName} typing verification failed. Expected: "${text}", Got: "${enteredValue}"`);
+        
+        // Try one more time with focus and retry
+        logger.info(`Retrying ${fieldName} typing...`);
+        await element.focus();
+        await this.randomDelay(300, 500);
+        await this.clearAndType(element, text);
+        await this.randomDelay(500, 1000);
+        
+        const retryValue = await element.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (retryValue === text) {
+          logger.info(`✅ ${fieldName} retry typing verification successful: "${retryValue}"`);
+          return true;
+        } else {
+          logger.warn(`⚠️ ${fieldName} retry typing verification failed. Expected: "${text}", Got: "${retryValue}"`);
+          return false;
+        }
+      }
+    } catch (error) {
+      logger.warn(`Error in typeWithVerification for ${fieldName}: ${error}`);
+      return false;
     }
   }
 

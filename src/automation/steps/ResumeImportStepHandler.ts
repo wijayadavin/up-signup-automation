@@ -71,28 +71,20 @@ export class ResumeImportStepHandler extends StepHandler {
           return manualResult;
         }
 
-        // If manual button not found, try upload mode as fallback
-        logger.info('Manual button not found, trying upload mode as fallback...');
-        
-        // Try to click the upload resume button
-        logger.info('Looking for Upload your resume button...');
-        const uploadResult = await this.clickUploadResumeButton();
-        if (uploadResult.status !== 'success') {
-          return uploadResult;
+        // If manual button not found, try Next button directly (no upload fallback)
+        logger.info('Manual button not found, trying Next button directly...');
+        const nextResult = await this.tryNextButtonFirst();
+        if (nextResult) {
+          this.screenshots.resume_import_after = await this.takeScreenshot('resume_import_after');
+          return nextResult;
         }
 
-        // Wait for modal to appear and handle file upload
-        logger.info('Waiting for upload modal to appear...');
-        const modalResult = await this.handleUploadModal();
-        if (modalResult.status !== 'success') {
-          return modalResult;
-        }
-
-        // After successful upload, look for Skip or Next button
-        logger.info('Looking for Skip or Next button after upload...');
-        const finalNavigationResult = await this.handleNavigation();
-        this.screenshots.resume_import_after = await this.takeScreenshot('resume_import_after');
-        return finalNavigationResult;
+        // If Next button also not found, return error (no upload fallback in manual mode)
+        logger.error('Neither manual button nor Next button found in manual mode');
+        return this.createError(
+          'MANUAL_MODE_FAILED',
+          'Manual mode failed: neither "Fill out manually" button nor Next button found'
+        );
       }
 
     } catch (error) {

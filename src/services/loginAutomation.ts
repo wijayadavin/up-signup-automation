@@ -2,6 +2,7 @@ import { Page, ElementHandle } from 'puppeteer';
 import { getLogger } from '../utils/logger.js';
 import type { User } from '../types/database.js';
 import { ResumeGenerator } from '../utils/resumeGenerator.js';
+import { ResumeImportStepHandler } from '../automation/steps/ResumeImportStepHandler.js';
 
 const logger = getLogger(import.meta.url);
 
@@ -285,7 +286,7 @@ export class LoginAutomation {
 
       // Press Enter to submit the email form
       await this.page.keyboard.press('Enter');
-      await this.randomDelay(1000, 2000);
+      await this.randomDelay(2000, 4000);
 
       // Wait for either password form or error
       const passwordField = await this.waitForSelectorWithRetry([
@@ -415,7 +416,7 @@ export class LoginAutomation {
 
       // Press Enter to submit the password form
       await this.page.keyboard.press('Enter');
-      await this.randomDelay(2000, 3000);
+      await this.randomDelay(4000, 6000);
 
       // Wait for navigation to complete with retry logic
       let currentUrl = '';
@@ -1133,366 +1134,30 @@ export class LoginAutomation {
 
   private async handleResumeImportStep(): Promise<LoginResult> {
     try {
-      logger.info('Handling resume import step with PDF upload...');
+      logger.info('Handling resume import step...');
 
-      // Assert current route or try to navigate to the correct page
-      const currentUrl = this.page.url();
-      if (!currentUrl.includes('/nx/create-profile/resume-import')) {
-        logger.warn(`Not on resume import page (${currentUrl}), trying to navigate...`);
-        
-        // Try URL fallback navigation
-        const nextUrl = this.getNextStepUrl(currentUrl);
-        if (nextUrl && nextUrl.includes('/resume-import')) {
-          logger.info(`Navigating directly to resume import page: ${nextUrl}`);
-          
-          try {
-            await this.page.goto(nextUrl, {
-              waitUntil: 'networkidle2',
-              timeout: 15000,
-            });
-            
-            const newUrl = this.page.url();
-            if (!newUrl.includes('/resume-import')) {
-              logger.error(`URL navigation failed: expected resume-import but got ${newUrl}`);
-              // Continue anyway and try to handle the current page
-            } else {
-              logger.info('Successfully navigated to resume import page');
-            }
-          } catch (error) {
-            logger.warn('URL navigation failed, trying to handle current page:', error);
-            // Continue anyway and try to handle the current page
-          }
-        }
-        
-        // Check for page content as fallback
-        const heading = await this.page.$('h1, h2, [role="heading"]');
-        if (heading) {
-          const headingText = await heading.evaluate(el => el.textContent?.toLowerCase() || '');
-          logger.info(`Page heading detected: "${headingText}"`);
-          
-          // Check if this looks like a goal/work preference page that we can skip
-          if (headingText.includes('how would you like to work') || headingText.includes('and how would you like to work')) {
-            logger.info('Detected goal/work preference page, looking for Next button to continue...');
-            
-            // Try to find and click Next button to progress
-            const nextButton = await this.waitForSelectorWithRetry([
-              'button:contains("Next")',
-              '[data-qa="next-btn"]',
-              '.air3-btn-primary',
-              'button[type="submit"]',
-            ], 10000);
-            
-            if (nextButton) {
-              logger.info('Found Next button, clicking to continue...');
-              await nextButton.click();
-              await this.randomDelay(2000, 3000);
-              
-              // Wait for navigation
-              try {
-                await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-                logger.info('Navigation completed, continuing with resume import logic...');
-              } catch (error) {
-                logger.warn('Navigation timeout, continuing anyway...');
-              }
-            } else {
-              logger.warn('No Next button found on goal/work preference page');
-            }
-          }
-        }
-      }
+      // Use the new ResumeImportStepHandler
+      const resumeHandler = new ResumeImportStepHandler(this.page, this.user);
+      const result = await resumeHandler.execute({ uploadOnly: false }); // Always use manual mode in old automation
 
-      await this.waitForPageReady();
-      this.screenshots.resume_before = await this.takeScreenshot('resume_before');
-
-      // Generate PDF resume first
-      logger.info('Generating PDF resume for user...');
-      let resumePdfPath: string;
-      try {
-        resumePdfPath = await ResumeGenerator.generateResume(this.user);
-        logger.info(`Resume PDF generated at: ${resumePdfPath}`);
-      } catch (error) {
-        logger.error('Failed to generate resume PDF:', error);
-            return {
-              status: 'soft_fail',
-              stage: 'create_profile',
-          error_code: 'RESUME_PDF_GENERATION_FAILED',
-              screenshots: this.screenshots,
-              url: currentUrl,
-          evidence: `Failed to generate resume PDF: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      // Convert AutomationResult to LoginResult
+      if (result.status === 'success') {
+        return {
+          status: 'success',
+          stage: 'create_profile',
+          screenshots: this.screenshots,
+          url: this.page.url(),
         };
-      }
-
-      // Click "Upload your resume" button
-      const uploadButton = await this.waitForSelectorWithRetry([
-        'button[data-qa="resume-upload-btn-mobile"]',
-        'button[data-ev-label="resume_upload_btn_mobile"]',
-        'button:contains("Upload your resume")',
-        'button:contains("Upload")',
-        '.air3-btn-secondary:contains("Upload")',
-      ], 15000);
-
-      if (!uploadButton) {
-        logger.warn('Upload resume button not found, trying alternative selectors...');
-        // Try to find any upload-related button
-        const altUploadButton = await this.waitForSelectorWithRetry([
-          'button[data-ev-label*="upload"]',
-          'button[data-qa*="upload"]',
-          '[role="button"]:contains("Upload")',
-          'button:contains("resume")',
-        ], 5000);
-        
-        if (!altUploadButton) {
-          return {
-            status: 'soft_fail',
-            stage: 'create_profile',
-            error_code: 'RESUME_UPLOAD_BUTTON_NOT_FOUND',
-            screenshots: this.screenshots,
-            url: currentUrl,
-            evidence: 'Upload resume button not found',
-          };
-        }
-        await altUploadButton.click();
       } else {
-        await uploadButton.click();
-      }
-
-      await this.randomDelay(2000, 3000);
-
-      // Wait for upload modal to appear
-      const uploadModal = await this.waitForSelectorWithRetry([
-        '[role="dialog"]',
-        '.modal',
-        '[data-test="modal"]',
-        '.air3-modal',
-      ], 10000);
-
-      if (!uploadModal) {
         return {
           status: 'soft_fail',
           stage: 'create_profile',
-          error_code: 'RESUME_UPLOAD_MODAL_NOT_FOUND',
+          error_code: result.error_code || 'RESUME_IMPORT_STEP_FAILED',
           screenshots: this.screenshots,
-          url: currentUrl,
-          evidence: 'Resume upload modal did not appear',
+          url: this.page.url(),
+          evidence: result.evidence || 'Resume import step failed',
         };
       }
-
-      logger.info('Upload modal appeared, looking for file input element...');
-
-      // Look for file input directly in the modal (it should be present but hidden)
-      let fileInput = await this.waitForSelectorWithRetry([
-        'input[type="file"]',
-        'input[accept*="pdf"]',
-        'input[accept*=".pdf"]',
-        'input[accept*=".doc"]',
-        'input[accept*=".rtf"]',
-      ], 10000);
-      
-      // If still not found, try more specific selectors
-      if (!fileInput) {
-        logger.info('File input not found with basic selectors, trying specific modal selectors...');
-        fileInput = await this.waitForSelectorWithRetry([
-          '.air3-modal input[type="file"]',
-          '.upload-step-1 input[type="file"]',
-          '.drop-area input[type="file"]',
-          '[data-v-e7ec285a] input[type="file"]',
-          '.fe-upload-btn input[type="file"]',
-        ], 5000);
-      }
-        
-      if (!fileInput) {
-          return {
-            status: 'soft_fail',
-            stage: 'create_profile',
-          error_code: 'FILE_INPUT_NOT_FOUND',
-            screenshots: this.screenshots,
-            url: currentUrl,
-          evidence: 'File input not found in upload modal',
-        };
-      }
-
-      // Upload the PDF file directly to the file input
-      logger.info(`Uploading resume PDF: ${resumePdfPath}`);
-      
-      // Verify the file exists before uploading
-      const fs = await import('fs');
-      if (!fs.existsSync(resumePdfPath)) {
-        return {
-          status: 'soft_fail',
-          stage: 'create_profile',
-          error_code: 'RESUME_PDF_FILE_NOT_FOUND',
-          screenshots: this.screenshots,
-          url: currentUrl,
-          evidence: `Resume PDF file not found at path: ${resumePdfPath}`,
-        };
-      }
-      
-      const fileStats = fs.statSync(resumePdfPath);
-      logger.info({ 
-        fileSize: `${(fileStats.size / 1024).toFixed(2)} KB`,
-        filePath: resumePdfPath 
-      }, 'Resume PDF file details');
-      
-      await fileInput.uploadFile(resumePdfPath);
-      logger.info('PDF file uploaded successfully');
-
-      await this.randomDelay(3000, 5000); // Wait for file upload to process
-
-      // Verify the file was uploaded by checking for the file name in the UI
-      logger.info('Verifying file upload by checking for file name in UI...');
-      const expectedFileName = `resume_${this.user.id}.pdf`;
-      logger.info(`Looking for uploaded file: ${expectedFileName}`);
-      
-      const fileNameElement = await this.waitForSelectorWithRetry([
-        '.file-name',
-        'span.file-name',
-        'span.ellipsis.file-name',
-        '.ellipsis.file-name',
-        '[class*="file-name"]',
-        '.info-container .file-name',
-        '.info-container span.ellipsis'
-      ], 10000);
-
-      if (fileNameElement) {
-        const fileName = await fileNameElement.evaluate((el: Element) => el.textContent?.trim() || '');
-        logger.info(`File upload verified: "${fileName}" found in UI`);
-        
-        // Check if the filename matches what we expect
-        if (fileName === expectedFileName) {
-          logger.info(`✅ Filename matches expected: ${expectedFileName}`);
-        } else if (fileName.includes(`resume_${this.user.id}`)) {
-          logger.info(`✅ Filename contains expected pattern: ${fileName}`);
-        } else {
-          logger.warn(`⚠️ Filename "${fileName}" doesn't match expected "${expectedFileName}"`);
-        }
-        
-        // Also check for upload success indicators (green checkmark, etc.)
-        const uploadSuccessIndicators = await this.page.$$('[data-qa="upload-success"], .air3-icon.text-primary, .checkmark, [class*="success"], [class*="complete"]');
-        if (uploadSuccessIndicators.length > 0) {
-          logger.info(`Found ${uploadSuccessIndicators.length} upload success indicators`);
-        }
-      } else {
-        logger.warn('File name not found in UI, upload might have failed');
-        // Continue anyway as the file might still be processing
-      }
-
-      // Wait for the specific continue button after file upload
-      logger.info('Waiting for resume upload continue button...');
-      
-      // Take a screenshot to debug the current state
-      this.screenshots.resume_upload_debug = await this.takeScreenshot('resume_upload_debug');
-      
-      // Try multiple approaches to find the continue button
-      let continueButton = null;
-      
-      // Approach 1: Look for the specific button with exact selectors
-      continueButton = await this.page.$('button[data-qa="resume-upload-continue-btn"]');
-      if (continueButton) {
-        logger.info('Found continue button via data-qa selector');
-      } else {
-        continueButton = await this.page.$('button[data-ev-label="resume_upload_continue_btn"]');
-        if (continueButton) {
-          logger.info('Found continue button via data-ev-label selector');
-        }
-      }
-      
-      // Approach 2: Look for button with specific classes and text
-      if (!continueButton) {
-        const allButtons = await this.page.$$('button');
-        for (const button of allButtons) {
-          const text = await button.evaluate(el => el.textContent?.trim() || '');
-          const classes = await button.evaluate(el => el.className || '');
-          logger.info(`Found button: "${text}" with classes: "${classes}"`);
-          
-          if (text.toLowerCase().includes('continue') && classes.includes('air3-btn-primary')) {
-            continueButton = button;
-            logger.info('Found continue button via text and class search');
-            break;
-          }
-        }
-      }
-      
-      // Approach 3: Fallback to generic selectors
-      if (!continueButton) {
-        continueButton = await this.waitForSelectorWithRetry([
-          'button.air3-btn.air3-btn-primary:contains("Continue")',
-          'button:contains("Continue")',
-          'button:contains("Upload")',
-          'button:contains("Next")',
-          'button[data-qa*="continue"]',
-          'button[data-qa*="next"]',
-          '.air3-btn-primary',
-        ], 10000);
-        if (continueButton) {
-          logger.info('Found continue button via fallback selectors');
-        }
-      }
-
-      if (continueButton) {
-        // Check if button is enabled/clickable
-        const isEnabled = await continueButton.evaluate((el: Element) => {
-          const button = el as HTMLButtonElement;
-          return !button.disabled && button.offsetParent !== null;
-        });
-        
-        if (isEnabled) {
-          logger.info('Continue button is enabled, clicking to proceed...');
-          await continueButton.click();
-      await this.randomDelay(2000, 3000);
-          
-          // Wait a bit more for the upload to process
-          logger.info('Waiting for upload processing to complete...');
-          await this.randomDelay(3000, 5000);
-        } else {
-          logger.warn('Continue button found but is disabled or not visible');
-          return {
-            status: 'soft_fail',
-            stage: 'create_profile',
-            error_code: 'RESUME_CONTINUE_BUTTON_DISABLED',
-            screenshots: this.screenshots,
-            url: currentUrl,
-            evidence: 'Continue button is disabled or not visible',
-          };
-        }
-      } else {
-        logger.warn('Continue button not found after file upload');
-        return {
-          status: 'soft_fail',
-          stage: 'create_profile',
-          error_code: 'RESUME_CONTINUE_BUTTON_NOT_FOUND',
-          screenshots: this.screenshots,
-          url: currentUrl,
-          evidence: 'Continue button not found after resume upload',
-        };
-      }
-
-      this.screenshots.resume_after = await this.takeScreenshot('resume_after');
-
-      // Wait for navigation to next step
-      try {
-        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-      } catch (error) {
-        // Check if we're already on the next page
-        const newUrl = this.page.url();
-        if (!newUrl.includes('/nx/create-profile/')) {
-          return {
-            status: 'soft_fail',
-            stage: 'create_profile',
-            error_code: 'RESUME_NAVIGATION_FAILED',
-            screenshots: this.screenshots,
-            url: newUrl,
-            evidence: 'Failed to navigate from resume import page',
-          };
-        }
-      }
-
-      logger.info('Resume upload completed successfully, proceeding to next step');
-      return {
-        status: 'success',
-        stage: 'create_profile',
-        screenshots: this.screenshots,
-        url: this.page.url(),
-      };
 
     } catch (error) {
       return {
@@ -4526,7 +4191,7 @@ export class LoginAutomation {
   private async checkIfFirstLetterTyped(expectedText: string): Promise<boolean> {
     try {
       // Wait a bit for the typing to complete
-      await this.randomDelay(200, 400);
+      await this.randomDelay(300, 600);
       
       // Get the currently focused element
       const focusedElement = await this.page.evaluate(() => {
@@ -4547,10 +4212,10 @@ export class LoginAutomation {
         focusedElement, 
         hasFirstLetter, 
         hasAnyContent, 
-        hasExpectedContent 
-      }, 'Checking if first letter was typed');
+        hasExpectedContent
+      }, 'Checking if text was typed correctly');
       
-      // Return true if we have the first letter OR if we have any content (fallback)
+      // Return true if we have the first letter OR if we have any content
       return hasFirstLetter || hasAnyContent;
     } catch (error) {
       logger.warn('Error checking if first letter was typed, assuming not typed');
@@ -4809,6 +4474,33 @@ export class LoginAutomation {
     }
   }
 
+  private async verifyTypingComplete(element: any, expectedText: string, fieldName: string): Promise<boolean> {
+    try {
+      // Wait for typing to complete
+      await this.randomDelay(300, 500);
+      
+      // Get the actual field value
+      const fieldValue = await element.evaluate((el: any) => el.value || '');
+      
+      // Simple check: has content and first letter matches
+      const hasContent = fieldValue.length > 0;
+      const hasFirstLetter = fieldValue.toLowerCase().includes(expectedText.charAt(0).toLowerCase());
+      
+      logger.info({
+        fieldName,
+        expectedText,
+        fieldValue,
+        hasContent,
+        hasFirstLetter
+      }, 'Verifying typing completion');
+      
+      return hasContent && hasFirstLetter;
+    } catch (error) {
+      logger.warn(`Error verifying typing completion for ${fieldName}:`, error);
+      return false;
+    }
+  }
+
   private async typeWithVerification(
     element: any, 
     text: string, 
@@ -4834,10 +4526,10 @@ export class LoginAutomation {
       await this.typeHumanLike(text);
       await this.randomDelay(800, 1200);
       
-      // Verify the first letter was typed, if not try again
-      const firstLetterTyped = await this.checkIfFirstLetterTyped(text);
-      if (!firstLetterTyped) {
-        logger.warn(`${fieldName}: First letter not typed, trying again with more focus`);
+      // Verify the typing is complete (prevents cutoff)
+      const typingComplete = await this.verifyTypingComplete(element, text, fieldName);
+      if (!typingComplete) {
+        logger.warn(`${fieldName}: Typing verification failed, trying again with more focus`);
         
         // Try a more aggressive approach
         await element.click();
@@ -4856,17 +4548,18 @@ export class LoginAutomation {
         await this.typeHumanLike(text);
         await this.randomDelay(1000, 1500);
         
-        // Check again
-        const retryTyped = await this.checkIfFirstLetterTyped(text);
-        if (!retryTyped) {
+        // Check again with more lenient verification
+        const retryComplete = await this.verifyTypingComplete(element, text, fieldName);
+        if (!retryComplete) {
           logger.error(`${fieldName}: Still failed after retry, checking field value directly`);
           
-          // Last resort: check the actual field value
+          // Last resort: check the actual field value with more lenient criteria
           const fieldValue = await element.evaluate((el: any) => el.value || '');
-          const hasContent = fieldValue.length > 0;
+          const hasAnyContent = fieldValue.length > 0;
+          const hasFirstLetter = fieldValue.toLowerCase().includes(text.charAt(0).toLowerCase());
           
-          if (hasContent) {
-            logger.info(`${fieldName}: Field has content, proceeding despite verification failure`);
+          if (hasAnyContent && hasFirstLetter) {
+            logger.info(`${fieldName}: Field has minimal content, proceeding despite verification failure`);
             return {
               status: 'success',
               stage: 'create_profile',
@@ -5541,9 +5234,11 @@ export class LoginAutomation {
   private async typeHumanLike(text: string): Promise<void> {
     for (const char of text) {
       await this.page.keyboard.type(char);
-      // Slower, more deliberate typing for better reliability
-      await this.randomDelay(80, 200);
+      // Slower, more deliberate typing for better reliability and to prevent cutoff
+      await this.randomDelay(100, 250);
     }
+    // Add a small delay after typing to ensure all characters are processed
+    await this.randomDelay(200, 400);
   }
 
   private async randomDelay(min: number, max: number): Promise<void> {

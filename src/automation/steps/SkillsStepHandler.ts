@@ -103,16 +103,97 @@ export class SkillsStepHandler extends StepHandler {
       }
 
       // Now try to find and click Next button
+      logger.info('Attempting to click Next button after skills selection...');
       const result = await this.navigationAutomation.clickNextButton(this.stepName);
-      this.screenshots.skills_after = await this.takeScreenshot('skills_after');
       
-      logger.info('Skills form filled and navigation completed successfully');
-      return result;
+      logger.info(`Next button click result: ${result.status} - ${result.error_code || 'success'}`);
+      
+      if (result.status === 'success') {
+        logger.info('Skills form filled and navigation completed successfully');
+        this.screenshots.skills_after = await this.takeScreenshot('skills_after');
+        return result;
+      } else {
+        logger.warn(`Skills navigation failed: ${result.error_code} - ${result.evidence}`);
+        
+        // Fallback: try to find and click Next button manually
+        logger.info('Attempting fallback Next button click...');
+        const fallbackResult = await this.tryFallbackNextButton();
+        
+        this.screenshots.skills_after = await this.takeScreenshot('skills_after');
+        return fallbackResult;
+      }
 
     } catch (error) {
       return this.createError(
         'SKILLS_FORM_FILL_FAILED',
         `Failed to fill skills form: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async tryFallbackNextButton(): Promise<AutomationResult> {
+    try {
+      logger.info('Trying fallback Next button detection...');
+      
+      // Try multiple approaches to find the Next button
+      const nextButtonSelectors = [
+        'button[data-qa="next-btn"]',
+        'button[data-ev-label="next_btn"]',
+        'button.air3-btn-primary:contains("Next")',
+        'button:contains("Next")',
+        '[role="button"]:contains("Next")',
+        'button:contains("Continue")',
+        'button:contains("Skip")',
+        'button[type="submit"]',
+        '.air3-btn-primary',
+        'button.air3-btn'
+      ];
+
+      for (const selector of nextButtonSelectors) {
+        try {
+          logger.info(`Trying selector: ${selector}`);
+          const button = await this.page.$(selector);
+          
+          if (button) {
+            const buttonText = await button.evaluate((el: Element) => el.textContent?.trim() || '');
+            const isVisible = await button.evaluate((el: Element) => {
+              const rect = el.getBoundingClientRect();
+              return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
+            });
+            
+            logger.info(`Found button with text: "${buttonText}", visible: ${isVisible}`);
+            
+            if (isVisible && (buttonText.toLowerCase().includes('next') || buttonText.toLowerCase().includes('continue') || buttonText.toLowerCase().includes('skip'))) {
+              logger.info(`Clicking fallback button: "${buttonText}"`);
+              await this.clickElement(button);
+              await this.randomDelay(2000, 3000);
+              
+              // Check if navigation occurred
+              const newUrl = this.page.url();
+              logger.info(`URL after fallback click: ${newUrl}`);
+              
+              if (newUrl.includes('/nx/create-profile/')) {
+                logger.info('Fallback Next button click successful');
+                return this.createSuccess();
+              }
+            }
+          }
+        } catch (error) {
+          logger.warn(`Selector ${selector} failed: ${error}`);
+          continue;
+        }
+      }
+      
+      logger.warn('All fallback Next button attempts failed');
+      return this.createError(
+        'SKILLS_FALLBACK_NEXT_FAILED',
+        'All fallback Next button attempts failed'
+      );
+      
+    } catch (error) {
+      return this.createError(
+        'SKILLS_FALLBACK_NEXT_FAILED',
+        `Fallback Next button failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

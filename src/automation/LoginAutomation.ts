@@ -468,49 +468,48 @@ export class LoginAutomation extends BaseAutomation {
             logger.info(`Current URL after navigation: ${currentUrl}`);
 
             if (currentUrl.includes(`/nx/create-profile/${options.step}`)) {
-              navigationSuccess = true;
               logger.info(`Successfully navigated to ${options.step} step`);
-              
-              // Wait for page content with specific education page elements
               await this.waitForPageReady();
-              
-              // Wait for the Add Education button specifically
-              const addButton = await this.waitForSelectorWithRetry([
-                'button[data-qa="education-add-btn"][data-ev-label="education_add_btn"]',
-                'button[data-qa="education-add-btn"]',
-                '#add-education-label',
-                '.carousel-list-add-new'
-              ], 20000);
 
-              if (addButton) {
-                logger.info('Add Education button found - page content ready');
-                navigationSuccess = true;
-                break;
-              } else {
-                logger.warn('Add Education button not found, trying page refresh...');
-                
-                // Force refresh the page
+              // Step-specific readiness checks
+              if (options.step === 'welcome') {
+                const getStarted = await this.waitForSelectorWithRetry([
+                  'button[data-qa="get-started-btn"]',
+                  '[aria-label*="Get started"]',
+                  'button:contains("Get Started")',
+                ], 15000);
+                if (getStarted) {
+                  logger.info('Welcome page verified (Get Started button present)');
+                  navigationSuccess = true;
+                  break;
+                }
+                logger.warn('Get Started button not found on welcome page, refreshing and retrying...');
                 await this.page.reload({ waitUntil: 'networkidle2', timeout: 20000 });
-                await this.randomDelay(2000, 3000);
-                
-                // Check again after refresh
-                const addButtonAfterRefresh = await this.waitForSelectorWithRetry([
+                await this.randomDelay(1500, 2500);
+                continue;
+              }
+
+              if (options.step === 'education') {
+                const addButton = await this.waitForSelectorWithRetry([
                   'button[data-qa="education-add-btn"][data-ev-label="education_add_btn"]',
                   'button[data-qa="education-add-btn"]',
                   '#add-education-label',
                   '.carousel-list-add-new'
                 ], 20000);
-                
-                if (addButtonAfterRefresh) {
-                  logger.info('Add Education button found after refresh');
+                if (addButton) {
+                  logger.info('Education page verified (Add Education button present)');
                   navigationSuccess = true;
                   break;
-                } else {
-                  logger.warn('Add Education button still not found after refresh');
-                  await this.randomDelay(4000, 6000);
-                  continue;
                 }
+                logger.warn('Education Add button not found, refreshing and retrying...');
+                await this.page.reload({ waitUntil: 'networkidle2', timeout: 20000 });
+                await this.randomDelay(1500, 2500);
+                continue;
               }
+
+              // Default: consider success if URL matches and page is ready
+              navigationSuccess = true;
+              break;
             }
 
             logger.warn(`Navigation attempt ${attempts} failed, URL is ${currentUrl}`);

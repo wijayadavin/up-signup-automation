@@ -34,8 +34,8 @@ export class WelcomeStepHandler extends StepHandler {
       logger.info(`Detected profile creation step: ${profileStep}`);
 
       // Handle different starting points
-      if (profileStep === 'initial') {
-        // Start from the beginning - click Get Started
+      if (profileStep === 'initial' || profileStep === 'welcome') {
+        // On initial create-profile or explicit welcome page - click Get Started
         const getStartedButton = await this.waitForSelectorWithRetry([
           'button[data-qa="get-started-btn"]',
           '[aria-label*="Get started"]',

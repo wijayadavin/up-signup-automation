@@ -277,7 +277,7 @@ export class UpworkService {
     let userBrowserManager: BrowserManager | undefined;
     
     try {
-      logger.info({ userId: user.id, email: user.email }, 'Processing user');
+      logger.info({ userId: user.id, email: user.email, country: user.country_code }, 'Processing user');
 
       // Update attempt count
       await this.userService.updateUserAttempt(user.id, {
@@ -303,6 +303,7 @@ export class UpworkService {
         logger.info({ 
           userId: user.id,
           email: user.email,
+          country: user.country_code,
           currentIP,
           proxyEnabled: userBrowserManager.isProxyEnabled()
         }, 'Starting automation with current IP');
@@ -315,11 +316,11 @@ export class UpworkService {
       let loginResult: LoginResult | ServicesLoginResult;
 
       if (useAutomationWrapper) {
-        logger.info({ userId: user.id }, 'Using automation wrapper (session/OTP features)');
+        logger.info({ userId: user.id, country: user.country_code }, 'Using automation wrapper (session/OTP features)');
         const loginAutomation = new AutomationLoginAutomation(page, user, userBrowserManager);
         loginResult = await loginAutomation.execute(options);
       } else {
-        logger.info({ userId: user.id }, 'Using comprehensive services automation (full step handling)');
+        logger.info({ userId: user.id, country: user.country_code }, 'Using comprehensive services automation (full step handling)');
         const loginAutomation = new ServicesLoginAutomation(page, user);
         loginResult = await loginAutomation.execute({ uploadOnly: options?.uploadOnly });
       }
@@ -327,6 +328,7 @@ export class UpworkService {
       // Log the result
       logger.info({ 
         userId: user.id, 
+        country: user.country_code,
         status: loginResult.status, 
         stage: loginResult.stage,
         error_code: loginResult.error_code,
@@ -344,7 +346,7 @@ export class UpworkService {
       if (loginResult.status === 'success') {
         // Check if this is a rate_completed status (skipLocation mode)
         if (loginResult.stage === 'rate_completed') {
-          logger.info({ userId: user.id }, 'Rate step completed (skipLocation mode) - not marking as full success');
+          logger.info({ userId: user.id, country: user.country_code }, 'Rate step completed (skipLocation mode) - not marking as full success');
           return { 
             success: true,
             loginResult 
@@ -354,7 +356,7 @@ export class UpworkService {
           await this.userService.updateUserSuccess(user.id, {
             success_at: new Date(),
           });
-          logger.info({ userId: user.id }, 'User processed successfully');
+          logger.info({ userId: user.id, country: user.country_code }, 'User processed successfully');
           return { 
             success: true,
             loginResult 
@@ -366,12 +368,12 @@ export class UpworkService {
           await this.userService.updateUserCaptchaFlag(user.id, {
             captcha_flagged_at: new Date(),
           });
-          logger.info({ userId: user.id }, 'User flagged for captcha due to suspicious login');
+          logger.info({ userId: user.id, country: user.country_code }, 'User flagged for captcha due to suspicious login');
         }
         
         // Handle phone verification pending - this is a retryable condition
         if (loginResult.error_code === 'PHONE_VERIFICATION_PENDING') {
-          logger.info({ userId: user.id }, 'Phone verification pending, user will be retried later');
+          logger.info({ userId: user.id, country: user.country_code }, 'Phone verification pending, user will be retried later');
         }
         
         // Soft failures - update with error info but don't mark as permanent failure
@@ -387,7 +389,7 @@ export class UpworkService {
           await this.userService.updateUserCaptchaFlag(user.id, {
             captcha_flagged_at: new Date(),
           });
-          logger.info({ userId: user.id }, 'User flagged for captcha due to network restriction/captcha');
+          logger.info({ userId: user.id, country: user.country_code }, 'User flagged for captcha due to network restriction/captcha');
         }
         
         // Hard failures - update with error info
@@ -462,7 +464,14 @@ export class UpworkService {
           }
         }
 
-        for (const user of normalUsers) {
+        // Sort users by ID in descending order (higher IDs first)
+        const sortedNormalUsers = normalUsers.sort((a, b) => b.id - a.id);
+        logger.info({ 
+          userIds: sortedNormalUsers.map(u => u.id),
+          count: sortedNormalUsers.length 
+        }, 'Processing users in descending ID order (highest first)');
+        
+        for (const user of sortedNormalUsers) {
           const result = await this.processUser(user, options);
           
           if (!result.success) {
@@ -550,8 +559,14 @@ export class UpworkService {
           let roundSuccessful = 0;
           let roundProcessed = 0;
 
-          // Process captcha-flagged users first
-          for (const user of captchaUsers) {
+          // Process captcha-flagged users first (sorted by ID descending)
+          const sortedCaptchaUsers = captchaUsers.sort((a, b) => b.id - a.id);
+          logger.info({ 
+            captchaUserIds: sortedCaptchaUsers.map(u => u.id),
+            count: sortedCaptchaUsers.length 
+          }, 'Processing captcha users in descending ID order (highest first)');
+          
+          for (const user of sortedCaptchaUsers) {
             roundProcessed++;
             // Assign a new proxy port to avoid conflicts
             const newProxyPort = await this.getNextAvailableProxyPort(user.last_proxy_port);
@@ -580,8 +595,14 @@ export class UpworkService {
             await this.delay(3000); // Longer delay for retries
           }
 
-          // Process other failed users
-          for (const user of failedUsers) {
+          // Process other failed users (sorted by ID descending)
+          const sortedFailedUsers = failedUsers.sort((a, b) => b.id - a.id);
+          logger.info({ 
+            failedUserIds: sortedFailedUsers.map(u => u.id),
+            count: sortedFailedUsers.length 
+          }, 'Processing failed users in descending ID order (highest first)');
+          
+          for (const user of sortedFailedUsers) {
             roundProcessed++;
             // Assign a new proxy port to avoid conflicts
             const newProxyPort = await this.getNextAvailableProxyPort(user.last_proxy_port);

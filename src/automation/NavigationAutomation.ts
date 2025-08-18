@@ -30,9 +30,11 @@ export class NavigationAutomation extends BaseAutomation {
 
   // Try to find and click next button
   async clickNextButton(stepName: string): Promise<AutomationResult> {
+    logger.info(`Looking for Next button on ${stepName} page...`);
     const nextButton = await this.waitForSelectorWithRetry(this.NEXT_BUTTON_SELECTORS, 10000);
     
     if (!nextButton) {
+      logger.warn(`Next button not found on ${stepName} page after 10 seconds`);
       return this.createError(
         `${stepName.toUpperCase()}_NEXT_NOT_FOUND`,
         `Next button not found on ${stepName} page`
@@ -43,12 +45,16 @@ export class NavigationAutomation extends BaseAutomation {
     await this.clickElement(nextButton);
     await this.randomDelay(500, 1000);
     
+    logger.info(`Waiting for navigation after clicking Next button...`);
     // Wait for navigation
     await this.waitForNavigation();
     
     // Verify we navigated
     const newUrl = this.page.url();
+    logger.info(`Current URL after navigation: ${newUrl}`);
+    
     if (!newUrl.includes('/nx/create-profile/')) {
+      logger.warn(`Navigation failed - expected create-profile URL but got: ${newUrl}`);
       return this.createError(
         `${stepName.toUpperCase()}_NAVIGATION_FAILED`,
         `Failed to navigate from ${stepName} page`
