@@ -449,6 +449,12 @@ const processUsersCmd = command({
       description: 'Force start from a specific step (e.g., "employment")',
       defaultValue: () => '',
     }),
+    retry: flag({
+      type: boolean,
+      long: 'retry',
+      description: 'Retry users flagged with captcha after all other users are completed',
+      defaultValue: () => false,
+    }),
   },
   handler: async (args) => {
     try {
@@ -470,6 +476,10 @@ const processUsersCmd = command({
         logger.info(`Force-step mode enabled: will start from "${args.step}" step`);
       }
 
+      if (args.retry) {
+        logger.info('Retry mode enabled: will retry captcha-flagged users after processing all other users');
+      }
+
       if (args.upload) {
         logger.info('Upload mode enabled: will stop after Step 4 (Resume Import)');
         if (args.noStealth) {
@@ -485,7 +495,8 @@ const processUsersCmd = command({
           uploadOnly: true,
           restoreSession: args.restoreSession,
           skipOtp: args.skipOtp,
-          step: args.step
+          step: args.step,
+          retry: args.retry
         });
       } else {
         if (args.noStealth) {
@@ -504,7 +515,8 @@ const processUsersCmd = command({
           restoreSession: args.restoreSession,
           skipOtp: args.skipOtp,
           skipLocation: args.skipLocation,
-          step: args.step
+          step: args.step,
+          retry: args.retry
         });
       }
       

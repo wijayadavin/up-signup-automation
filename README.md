@@ -128,6 +128,7 @@ The application provides several commands for different operations:
   - `--no-stealth`: Disable stealth mode for debugging (use normal browser behavior)
   - `--restore-session`: Restore existing session instead of starting from login
   - `--skip-otp`: Skip location step (except profile picture) and redirect to submit page
+  - `--retry`: Retry captcha-flagged users after processing all other users (assigns new proxy ports)
 - **`stats`**: View application statistics and user status
 - **`test-proxy`**: Test proxy configuration and verify IP details
 - **`import-csv`**: Bulk import users from CSV/TSV files
@@ -296,6 +297,16 @@ The automation includes:
 - **Use Cases**: Bypass phone verification, complete profile creation faster
 - **When to Use**: When you want to skip the OTP verification process
 - **Benefits**: Faster profile completion, no phone verification required
+
+**Retry Mode (`--retry`)**:
+- **Purpose**: Retry users who have been flagged with captcha after processing all other users
+- **Processing Order**: First processes normal pending users, then retries captcha-flagged users
+- **Proxy Management**: Automatically assigns new proxy ports to avoid conflicts
+- **User Criteria**: Only retries users with `up_created_at` set and no `success_at` (normally allowed to run)
+- **Captcha Flag Clearing**: Automatically clears captcha flag on successful retry
+- **Use Cases**: Handle users who encountered captcha during normal processing
+- **When to Use**: When you have users stuck due to captcha detection
+- **Benefits**: Automatic retry with fresh proxy, avoids conflicts with normal processing
 
 ## Crawl Steps & Automation Workflow
 
@@ -782,6 +793,9 @@ npm start process-users -- --skip-otp
 
 # Combine flags for different scenarios
 npm start process-users -- --upload --restore-session --skip-otp --limit 1
+
+# Retry captcha-flagged users after normal processing
+npm start process-users -- --retry --limit 5
 ```
 
 ### View Statistics
@@ -973,6 +987,7 @@ src/
 │   ├── FormAutomation.ts         # Form filling utilities
 │   ├── NavigationAutomation.ts   # Navigation and button clicking
 │   └── steps/                    # Step-specific handlers
+│       ├── WelcomeStepHandler.ts # Welcome/Get Started step
 │       ├── ExperienceStepHandler.ts # Experience selection step
 │       ├── GoalStepHandler.ts # Work goals selection step
 │       ├── WorkPreferenceStepHandler.ts # Work preferences step
@@ -1035,9 +1050,33 @@ assets/
 - `DEBUG_EMAIL`: (Optional) Email for reference (not used for automation)
 - `DEBUG_PASSWORD`: (Optional) Password for reference (not used for automation)
 
-### Skip Location Flag
+### Retry Flag with Proxy Testing
 
-The `--skip-location` flag allows you to stop the automation at the location page without filling it out.
+The `--retry` flag now includes intelligent proxy testing before processing all failed users (both captcha-flagged and other failures).
+
+**Usage:**
+```bash
+npm start process-users -- --limit 1 --retry
+```
+
+**Behavior:**
+- ✅ **Tests proxy connection first**: Before processing failed users, the system tests the proxy connection
+- ✅ **Retries proxy test**: If proxy test fails, it retries up to 3 times with 10-second delays
+- ✅ **Skips processing if proxy fails**: If proxy test fails after all retries, failed users are skipped
+- ✅ **Continues when proxy works**: Only processes failed users when proxy connection is confirmed working
+- ✅ **Processes all failed users**: Includes both captcha-flagged users and users with other error types
+- ✅ **Prioritizes captcha users**: Processes captcha-flagged users first, then other failed users
+- ✅ **Keeps retrying until success**: Continues retry rounds until all users are processed successfully
+- ✅ **Comprehensive logging**: Shows retry round numbers, success rates, and total progress
+- ✅ **Modular design**: Uses reusable `ProxyTestService` for consistent proxy testing across the application
+
+**Proxy Test Process:**
+1. **Multiple IP services**: Tests against httpbin.org, api.ipify.org, and ip.decodo.com
+2. **Fallback strategies**: Multiple methods to extract IP information from test pages
+3. **Detailed logging**: Shows current IP, proxy configuration, and test results
+4. **Error handling**: Provides specific error messages for different proxy issues
+
+### Skip Location Flag
 
 **Usage:**
 ```bash

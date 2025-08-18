@@ -74,6 +74,7 @@ export class UserService {
         .selectAll()
         .where('success_at', 'is', null)
         .where('up_created_at', 'is not', null)
+        .where('captcha_flagged_at', 'is', null) // Exclude captcha-flagged users from normal processing
         .orderBy('attempt_count', 'asc')
         .orderBy('created_at', 'asc')
         .limit(limit)
@@ -82,6 +83,45 @@ export class UserService {
       return users;
     } catch (error) {
       logger.error(error, 'Failed to get pending users');
+      throw error;
+    }
+  }
+
+  async getCaptchaFlaggedUsers(limit: number = 10): Promise<User[]> {
+    try {
+      const users = await this.db
+        .selectFrom('users')
+        .selectAll()
+        .where('success_at', 'is', null) // No success yet
+        .where('up_created_at', 'is not', null) // Has up_created_at (normally allowed to run)
+        .where('captcha_flagged_at', 'is not', null) // Only captcha-flagged users
+        .orderBy('captcha_flagged_at', 'asc') // Process oldest captcha flags first
+        .limit(limit)
+        .execute();
+
+      return users;
+    } catch (error) {
+      logger.error(error, 'Failed to get captcha-flagged users');
+      throw error;
+    }
+  }
+
+  async getFailedUsers(limit: number = 10): Promise<User[]> {
+    try {
+      const users = await this.db
+        .selectFrom('users')
+        .selectAll()
+        .where('success_at', 'is', null) // No success yet
+        .where('up_created_at', 'is not', null) // Has up_created_at (normally allowed to run)
+        .where('captcha_flagged_at', 'is', null) // Exclude captcha-flagged users (handled separately)
+        .where('rate_step_completed_at', 'is', null) // Include only users who haven't completed rate step yet
+        .orderBy('last_attempt_at', 'asc') // Process oldest failures first
+        .limit(limit)
+        .execute();
+
+      return users;
+    } catch (error) {
+      logger.error(error, 'Failed to get failed users');
       throw error;
     }
   }
@@ -145,6 +185,26 @@ export class UserService {
       return user;
     } catch (error) {
       logger.error(error, 'Failed to update user captcha flag');
+      throw error;
+    }
+  }
+
+  async clearUserCaptchaFlag(id: number): Promise<User> {
+    try {
+      const [user] = await this.db
+        .updateTable('users')
+        .set({
+          captcha_flagged_at: null,
+          updated_at: new Date(),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .execute();
+
+      logger.info({ userId: id }, 'User captcha flag cleared');
+      return user;
+    } catch (error) {
+      logger.error(error, 'Failed to clear user captcha flag');
       throw error;
     }
   }
@@ -233,6 +293,26 @@ export class UserService {
       return user;
     } catch (error) {
       logger.error(error, 'Failed to update user up_created_at');
+      throw error;
+    }
+  }
+
+  async updateUserLastProxyPort(id: number, proxyPort: number): Promise<User> {
+    try {
+      const [user] = await this.db
+        .updateTable('users')
+        .set({
+          last_proxy_port: proxyPort,
+          updated_at: new Date(),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .execute();
+
+      logger.info({ userId: id, proxyPort }, 'User last_proxy_port updated');
+      return user;
+    } catch (error) {
+      logger.error(error, 'Failed to update user last_proxy_port');
       throw error;
     }
   }

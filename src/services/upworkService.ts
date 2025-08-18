@@ -2,6 +2,7 @@ import { BrowserManager } from '../browser/browserManager.js';
 import { UserService } from './userService.js';
 import { getLogger } from '../utils/logger.js';
 import { LoginAutomation as AutomationLoginAutomation, type LoginResult } from '../automation/LoginAutomation.js';
+import { ProxyTestService } from './proxyTestService.js';
 import { LoginAutomation as ServicesLoginAutomation, type LoginResult as ServicesLoginResult } from '../services/loginAutomation.js';
 import type { User } from '../types/database.js';
 import type { Page } from 'puppeteer';
@@ -18,6 +19,7 @@ export class UpworkService {
   private browserManager: BrowserManager;
   private userService: UserService;
   private config: UpworkConfig;
+  private proxyTestService: ProxyTestService;
 
   constructor(
     browserManager: BrowserManager,
@@ -26,6 +28,7 @@ export class UpworkService {
   ) {
     this.browserManager = browserManager;
     this.userService = userService;
+    this.proxyTestService = new ProxyTestService(browserManager);
     this.config = {
       loginUrl: config.loginUrl ?? 'https://www.upwork.com/ab/account-security/login',
       maxRetries: config.maxRetries ?? 3,
@@ -433,53 +436,192 @@ export class UpworkService {
     }
   }
 
-  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string }): Promise<void> {
+  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string; retry?: boolean }): Promise<void> {
     try {
-      const users = await this.userService.getPendingUsers(limit);
+      // First, process normal pending users (excluding captcha-flagged)
+      const normalUsers = await this.userService.getPendingUsers(limit);
       
-      if (users.length === 0) {
-        logger.info('No pending users to process');
-        return;
-      }
+      if (normalUsers.length > 0) {
+        logger.info({ count: normalUsers.length }, 'Processing normal pending users (excluding captcha-flagged)');
 
-      logger.info({ count: users.length }, 'Processing pending users');
-
-      // Create a temporary page to clear browser state at the start
-      let tempPage: Page | null = null;
-      try {
-        tempPage = await this.browserManager.newPage();
-        await this.browserManager.clearBrowserState(tempPage);
-        logger.info('Initial browser state cleared');
-      } catch (error) {
-        logger.warn(error, 'Failed to clear initial browser state, continuing...');
-      } finally {
-        if (tempPage) {
-          try {
-            await tempPage.close();
-          } catch (error) {
-            // Page might already be closed
+        // Create a temporary page to clear browser state at the start
+        let tempPage: Page | null = null;
+        try {
+          tempPage = await this.browserManager.newPage();
+          await this.browserManager.clearBrowserState(tempPage);
+          logger.info('Initial browser state cleared');
+        } catch (error) {
+          logger.warn(error, 'Failed to clear initial browser state, continuing...');
+        } finally {
+          if (tempPage) {
+            try {
+              await tempPage.close();
+            } catch (error) {
+              // Page might already be closed
+            }
           }
         }
-      }
 
-      for (const user of users) {
-        const result = await this.processUser(user, options);
-        
-        if (!result.success) {
-          // Update user with error information
-          await this.userService.updateUserAttempt(user.id, {
-            last_attempt_at: new Date(),
-            attempt_count: user.attempt_count + 1,
-            last_error_code: result.errorCode,
-            last_error_message: result.errorMessage,
-          });
+        for (const user of normalUsers) {
+          const result = await this.processUser(user, options);
+          
+          if (!result.success) {
+            // Update user with error information
+            await this.userService.updateUserAttempt(user.id, {
+              last_attempt_at: new Date(),
+              attempt_count: user.attempt_count + 1,
+              last_error_code: result.errorCode,
+              last_error_message: result.errorMessage,
+            });
+          }
+
+          // Add delay between users to avoid rate limiting
+          await this.delay(2000);
         }
 
-        // Add delay between users to avoid rate limiting
-        await this.delay(2000);
+        logger.info('Finished processing normal pending users');
+      } else {
+        logger.info('No normal pending users to process');
       }
 
-      logger.info('Finished processing pending users');
+      // If retry mode is enabled, process failed users after normal users
+      if (options?.retry) {
+        logger.info('🔄 Retry mode enabled - will keep trying until all users succeed');
+        
+        let retryRound = 1;
+        let totalProcessed = 0;
+        let totalSuccessful = 0;
+        
+        while (true) {
+          // Get both captcha-flagged users and other failed users
+          const captchaUsers = await this.userService.getCaptchaFlaggedUsers(limit);
+          const failedUsers = await this.userService.getFailedUsers(limit);
+          
+          const totalRetryUsers = captchaUsers.length + failedUsers.length;
+          
+          if (totalRetryUsers === 0) {
+            logger.info({ 
+              retryRound, 
+              totalProcessed, 
+              totalSuccessful 
+            }, '🎉 All users have been processed successfully! Retry complete.');
+            break;
+          }
+          
+          logger.info({ 
+            retryRound,
+            captchaCount: captchaUsers.length, 
+            failedCount: failedUsers.length,
+            totalCount: totalRetryUsers,
+            totalProcessed,
+            totalSuccessful
+          }, `🔄 Retry round ${retryRound} - Processing ${totalRetryUsers} failed users`);
+          
+          // Test proxy connection before processing retry users
+          logger.info('Testing proxy connection before retry processing...');
+          const proxyTestResult = await this.proxyTestService.testProxyWithRetry(3, 10000);
+          
+          if (!proxyTestResult.success) {
+            logger.error({ error: proxyTestResult.error }, 'Proxy test failed, skipping retry processing');
+            logger.info('Failed users will be retried in next run when proxy is working');
+            return;
+          }
+          
+          logger.info({ ip: proxyTestResult.ip }, '✅ Proxy test successful, proceeding with retry processing');
+          
+          // Clear browser state before processing retry users
+          let tempPage: Page | null = null;
+          try {
+            tempPage = await this.browserManager.newPage();
+            await this.browserManager.clearBrowserState(tempPage);
+            logger.info('Browser state cleared for retry processing');
+          } catch (error) {
+            logger.warn(error, 'Failed to clear browser state for retry, continuing...');
+          } finally {
+            if (tempPage) {
+              try {
+                await tempPage.close();
+              } catch (error) {
+                // Page might already be closed
+              }
+            }
+          }
+
+          let roundSuccessful = 0;
+          let roundProcessed = 0;
+
+          // Process captcha-flagged users first
+          for (const user of captchaUsers) {
+            roundProcessed++;
+            // Assign a new proxy port to avoid conflicts
+            const newProxyPort = await this.getNextAvailableProxyPort(user.last_proxy_port);
+            await this.userService.updateUserLastProxyPort(user.id, newProxyPort);
+            
+            logger.info({ userId: user.id, email: user.email, newProxyPort }, 'Assigned new proxy port for captcha retry');
+
+            const result = await this.processUser(user, options);
+            
+            if (!result.success) {
+              // Update user with error information
+              await this.userService.updateUserAttempt(user.id, {
+                last_attempt_at: new Date(),
+                attempt_count: user.attempt_count + 1,
+                last_error_code: result.errorCode,
+                last_error_message: result.errorMessage,
+              });
+            } else {
+              // Clear captcha flag on success
+              await this.userService.clearUserCaptchaFlag(user.id);
+              roundSuccessful++;
+              logger.info({ userId: user.id, email: user.email }, 'Cleared captcha flag after successful retry');
+            }
+
+            // Add delay between users to avoid rate limiting
+            await this.delay(3000); // Longer delay for retries
+          }
+
+          // Process other failed users
+          for (const user of failedUsers) {
+            roundProcessed++;
+            // Assign a new proxy port to avoid conflicts
+            const newProxyPort = await this.getNextAvailableProxyPort(user.last_proxy_port);
+            await this.userService.updateUserLastProxyPort(user.id, newProxyPort);
+            
+            logger.info({ userId: user.id, email: user.email, newProxyPort, lastError: user.last_error_code }, 'Assigned new proxy port for failed user retry');
+
+            const result = await this.processUser(user, options);
+            
+            if (!result.success) {
+              // Update user with error information
+              await this.userService.updateUserAttempt(user.id, {
+                last_attempt_at: new Date(),
+                attempt_count: user.attempt_count + 1,
+                last_error_code: result.errorCode,
+                last_error_message: result.errorMessage,
+              });
+            } else {
+              roundSuccessful++;
+              logger.info({ userId: user.id, email: user.email }, 'Successfully retried failed user');
+            }
+
+            // Add delay between users to avoid rate limiting
+            await this.delay(3000); // Longer delay for retries
+          }
+
+          totalProcessed += roundProcessed;
+          totalSuccessful += roundSuccessful;
+
+          logger.info({ 
+            retryRound,
+            roundProcessed,
+            roundSuccessful,
+            totalProcessed,
+            totalSuccessful
+          }, `📊 Retry round ${retryRound} complete - ${roundSuccessful}/${roundProcessed} users succeeded`);
+
+          retryRound++;
+        }
+      }
 
     } catch (error) {
       logger.error(error, 'Failed to process pending users');
@@ -511,5 +653,15 @@ export class UpworkService {
 
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private async getNextAvailableProxyPort(currentPort: number | null): Promise<number> {
+    // Start from port 10001 if no current port, otherwise increment by 1
+    const basePort = 10001;
+    const nextPort = currentPort ? currentPort + 1 : basePort;
+    
+    // Ensure we don't exceed reasonable port range (up to 10100)
+    const maxPort = 10100;
+    return Math.min(nextPort, maxPort);
   }
 }

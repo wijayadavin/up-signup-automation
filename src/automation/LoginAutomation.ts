@@ -10,6 +10,7 @@ import { RateStepHandler } from './steps/RateStepHandler';
 import { OverviewStepHandler } from './steps/OverviewStepHandler';
 import { LocationStepHandler } from './steps/LocationStepHandler';
 import { ExperienceStepHandler } from './steps/ExperienceStepHandler';
+import { WelcomeStepHandler } from './steps/WelcomeStepHandler';
 import { GoalStepHandler } from './steps/GoalStepHandler';
 import { WorkPreferenceStepHandler } from './steps/WorkPreferenceStepHandler';
 import { ResumeImportStepHandler } from './steps/ResumeImportStepHandler';
@@ -53,6 +54,7 @@ export class LoginAutomation extends BaseAutomation {
     
     // Initialize step handlers
     this.stepHandlers = new Map<string, any>([
+      ['welcome', new WelcomeStepHandler(page, user)],
       ['experience', new ExperienceStepHandler(page, user)],
       ['goal', new GoalStepHandler(page, user)],
       ['work_preference', new WorkPreferenceStepHandler(page, user)],
@@ -204,13 +206,13 @@ export class LoginAutomation extends BaseAutomation {
       
       let navigationSucceeded = true;
       try {
-        await this.page.goto('https://www.upwork.com', {
+              await this.page.goto('https://www.upwork.com', {
           waitUntil: 'networkidle2',
-          timeout: 7000,
+            timeout: 14000,
         });
-        
-        // Wait for page to load
-        await this.waitForPageReady();
+      
+      // Wait for page to load
+      await this.waitForPageReady();
       } catch (error) {
         logger.warn('Navigation timeout or error during session restoration, checking current URL anyway...');
         navigationSucceeded = false;
@@ -242,6 +244,21 @@ export class LoginAutomation extends BaseAutomation {
         return true;
       } else {
         logger.info('❌ Session restoration failed, user is not logged in');
+        
+        // Delete the invalid session state since user is not logged in
+        try {
+          logger.info('Deleting invalid session state for user who is not logged in...');
+          const db = await import('../database/connection.js').then(m => m.getDatabase());
+          await db
+            .updateTable('users')
+            .set({ last_session_state: null })
+            .where('id', '=', this.user.id)
+            .execute();
+          logger.info(`✅ Deleted invalid session state for user ${this.user.id}`);
+        } catch (error) {
+          logger.error('Failed to delete invalid session state:', error);
+        }
+        
         return false;
       }
       
@@ -610,7 +627,7 @@ export class LoginAutomation extends BaseAutomation {
             
             if (currentUrl.includes('/nx/create-profile/submit')) {
               logger.info('✅ Successfully redirected to submit page');
-              return this.createSuccess('done');
+      return this.createSuccess('done');
             } else if (currentUrl.includes('/nx/create-profile/location')) {
               logger.error('❌ Redirect failed: still on location page, profile creation may be incomplete');
               return this.createError('SUBMIT_REDIRECT_FAILED', `Redirect to submit page failed - still on location page: ${currentUrl}`);
@@ -1119,7 +1136,7 @@ export class LoginAutomation extends BaseAutomation {
       
     } catch (error) {
       logger.error('Error in handleRateStep:', error);
-      return this.createError(
+        return this.createError(
         'RATE_STEP_FAILED',
         `Rate step failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1147,7 +1164,7 @@ export class LoginAutomation extends BaseAutomation {
       ], 10000);
       
       if (!radioButton) {
-        return this.createError(
+          return this.createError(
           `${stepName.toUpperCase()}_RADIO_NOT_FOUND`,
           `${radioValue} radio button not found on ${stepName} page`
         );
