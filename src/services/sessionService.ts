@@ -245,7 +245,7 @@ export class SessionService {
       try {
         await page.goto('https://www.upwork.com/nx/create-profile/location', { 
                       waitUntil: 'domcontentloaded',
-            timeout: 10000 // 3x faster timeout 
+            timeout: 10000
         });
         logger.info('Successfully navigated to location page');
       } catch (navigationError) {
@@ -253,7 +253,7 @@ export class SessionService {
         // Fallback to main Upwork page
         await page.goto('https://www.upwork.com', { 
                       waitUntil: 'domcontentloaded',
-            timeout: 10000 // 3x faster timeout 
+            timeout: 10000
         });
         logger.info('Navigated to main Upwork page as fallback');
       }

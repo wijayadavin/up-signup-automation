@@ -80,7 +80,7 @@ export class ExperienceStepHandler extends StepHandler {
         'input[type="radio"]'
       ];
 
-            let selectedRadio = null;
+      let selectedRadio = null;
       let selectionMethod = '';
 
       // Try to find any radio button using the selectors in order
@@ -141,12 +141,12 @@ export class ExperienceStepHandler extends StepHandler {
       // This ensures the selection is properly registered
       logger.info('Clicking the radio button to ensure selection...');
       await this.clickElement(selectedRadio);
-      await this.randomDelay(500, 1000);
+      await this.randomDelay(125, 250);
 
       // Click it again to make sure it's properly selected
       logger.info('Clicking the radio button again to ensure proper selection...');
       await this.clickElement(selectedRadio);
-      await this.randomDelay(500, 1000);
+      await this.randomDelay(125, 250);
 
       // Use JavaScript to force the selection
       logger.info('Using JavaScript to force radio button selection...');
@@ -158,12 +158,12 @@ export class ExperienceStepHandler extends StepHandler {
         radio.dispatchEvent(new Event('input', { bubbles: true }));
       });
       
-      await this.randomDelay(500, 1000);
+      await this.randomDelay(125, 250);
 
       logger.info('Successfully selected radio button option');
 
       // Wait a moment for any UI updates
-      await this.randomDelay(1000, 2000);
+      await this.randomDelay(250, 500);
 
       // Don't check for validation errors - just proceed
       // Radio buttons are safe to click and we've done our best to select one

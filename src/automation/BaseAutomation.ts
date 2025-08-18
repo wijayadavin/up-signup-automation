@@ -111,7 +111,7 @@ export class BaseAutomation {
     }
     
     // Additional wait to ensure page is fully loaded
-    await this.randomDelay(500, 1000);
+    await this.randomDelay(200, 400);
   }
 
   // Wait for login verification to complete
@@ -143,26 +143,26 @@ export class BaseAutomation {
     }
     
     // Additional wait for any redirects to complete
-    await this.randomDelay(1000, 2000);
+    await this.randomDelay(300, 600);
   }
 
   // Element interaction utilities
   protected async clickElement(element: ElementHandle<Element>): Promise<void> {
     await element.click();
-    await this.randomDelay(500, 1000);
+    await this.randomDelay(200, 400);
   }
 
   protected async clearAndType(element: ElementHandle<Element>, text: string): Promise<void> {
     // Focus and clear
     await element.focus();
-    await this.randomDelay(300, 500); // Wait for focus to be established
+    await this.randomDelay(150, 300); // Wait for focus to be established
     
     // Clear the field more thoroughly
     await this.page.keyboard.down('Control');
     await this.page.keyboard.press('KeyA');
     await this.page.keyboard.up('Control');
     await this.page.keyboard.press('Backspace');
-    await this.randomDelay(300, 500);
+    await this.randomDelay(150, 300);
     
     // Verify field is empty before typing
     const currentValue = await element.evaluate((el: Element) => (el as HTMLInputElement).value);
@@ -171,14 +171,14 @@ export class BaseAutomation {
       await element.evaluate((el: Element) => {
         (el as HTMLInputElement).value = '';
       });
-      await this.randomDelay(200, 300);
+      await this.randomDelay(100, 200);
     }
     
     // Type new text
     await this.typeHumanLike(text);
     
     // Wait a bit after typing to ensure the value is set
-    await this.randomDelay(500, 1000);
+    await this.randomDelay(200, 400);
   }
 
   // Error handling utilities

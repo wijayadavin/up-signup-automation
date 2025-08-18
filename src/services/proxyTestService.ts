@@ -41,13 +41,7 @@ export class ProxyTestService {
         : proxyInfo?.host;
       
       const proxyMode = proxyInfo?.port === 10001 ? 'sticky (debug)' : 'rotating (production)';
-      logger.info({ 
-        proxyHost,
-        proxyPort: proxyInfo?.port,
-        proxyMode,
-        proxyCountry: proxyInfo?.country,
-        proxyUsername: proxyInfo?.username
-      }, 'Testing proxy configuration');
+      logger.info(`Testing proxy configuration - Host: ${proxyHost}, Port: ${proxyInfo?.port}, Mode: ${proxyMode}, Country: ${proxyInfo?.country}, Username: ${proxyInfo?.username}`);
 
       // Create a new page for testing
       page = await this.browserManager.newPage();
@@ -129,7 +123,7 @@ export class ProxyTestService {
       });
 
       if (ipInfo.error) {
-        logger.error({ ipInfo }, 'Failed to extract IP information from proxy test');
+        logger.error(`Failed to extract IP information from proxy test: ${JSON.stringify(ipInfo)}`);
         return {
           success: false,
           error: 'Failed to extract IP information',
@@ -139,10 +133,7 @@ export class ProxyTestService {
 
       const currentIP = ipInfo.origin || ipInfo.ip || 'unknown';
       logger.info('Successfully connected through proxy');
-      logger.info({ 
-        currentIP,
-        fullResponse: ipInfo 
-      }, 'Proxy IP Information');
+      logger.info(`Proxy IP Information - Current IP: ${currentIP}, Full Response: ${JSON.stringify(ipInfo)}`);
 
       return {
         success: true,
@@ -152,7 +143,7 @@ export class ProxyTestService {
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      logger.error({ error: errorMessage }, 'Failed to test proxy configuration');
+      logger.error(`Failed to test proxy configuration: ${errorMessage}`);
 
       // Provide specific error information
       let specificError = 'Proxy test failed';

@@ -142,12 +142,12 @@ export class WorkPreferenceStepHandler extends StepHandler {
         // Click the checkbox to check it
         logger.info('Clicking the checkbox to check it...');
         await this.clickElement(selectedCheckbox);
-        await this.randomDelay(500, 1000);
+        await this.randomDelay(125, 250);
 
         // Click it again to make sure it's properly checked
         logger.info('Clicking the checkbox again to ensure proper selection...');
         await this.clickElement(selectedCheckbox);
-        await this.randomDelay(500, 1000);
+        await this.randomDelay(125, 250);
 
         // Use JavaScript to force the selection
         logger.info('Using JavaScript to force checkbox selection...');
@@ -159,13 +159,13 @@ export class WorkPreferenceStepHandler extends StepHandler {
           checkbox.dispatchEvent(new Event('input', { bubbles: true }));
         });
         
-        await this.randomDelay(500, 1000);
+        await this.randomDelay(125, 250);
       }
 
       logger.info('Successfully selected checkbox option');
 
       // Wait a moment for any UI updates
-      await this.randomDelay(1000, 2000);
+      await this.randomDelay(250, 500);
 
       // Don't check for validation errors - just proceed
       // Checkboxes are safe to click and we've done our best to select one

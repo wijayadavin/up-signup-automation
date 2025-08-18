@@ -41,7 +41,7 @@ export class NavigationAutomation extends BaseAutomation {
 
     logger.info(`Found Next button on ${stepName} page, clicking it...`);
     await this.clickElement(nextButton);
-    await this.randomDelay(2000, 4000);
+    await this.randomDelay(500, 1000);
     
     // Wait for navigation
     await this.waitForNavigation();
@@ -86,7 +86,7 @@ export class NavigationAutomation extends BaseAutomation {
       if (currentUrl.includes(pattern)) {
         return true;
       }
-      await this.randomDelay(500, 1000);
+      await this.randomDelay(200, 400);
     }
     
     return false;
@@ -158,7 +158,7 @@ export class NavigationAutomation extends BaseAutomation {
 
     logger.info(`Found Edit button on ${stepName} page, clicking it...`);
     await this.clickElement(editButton);
-    await this.randomDelay(2000, 3000);
+    await this.randomDelay(500, 1000);
     
     return this.createSuccess();
   }
@@ -184,7 +184,7 @@ export class NavigationAutomation extends BaseAutomation {
 
     logger.info(`Found Add ${stepName} button, clicking it...`);
     await this.clickElement(addButton);
-    await this.randomDelay(2000, 3000);
+    await this.randomDelay(500, 1000);
     
     return this.createSuccess();
   }
@@ -208,7 +208,7 @@ export class NavigationAutomation extends BaseAutomation {
 
     logger.info(`Clicking Save button in ${stepName} modal...`);
     await this.clickElement(saveButton);
-    await this.randomDelay(2000, 3000);
+    await this.randomDelay(500, 1000);
     
     return this.createSuccess();
   }
