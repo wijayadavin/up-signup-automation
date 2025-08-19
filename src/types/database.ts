@@ -34,6 +34,7 @@ export interface UsersTable {
   last_session_state: string | null;
   last_proxy_port: number | null;
   manual_otp: number | null;
+  otp_provider: string | null;
   rate_step_completed_at: Date | null;
   up_created_at: Date | null;
   created_at: Generated<Date>;
@@ -63,6 +64,7 @@ export interface User {
   last_session_state: string | null;
   last_proxy_port: number | null;
   manual_otp: number | null;
+  otp_provider: string | null;
   rate_step_completed_at: Date | null;
   up_created_at: Date | null;
   created_at: Date;

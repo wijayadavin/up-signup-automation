@@ -861,6 +861,109 @@ const testTextVerifiedCmd = command({
   }
 });
 
+// Test SMSPool services command
+const testSmsPoolCmd = command({
+  name: 'test-smspool',
+  description: 'Test SMSPool API and get account information',
+  args: {},
+  handler: async () => {
+    try {
+      logger.info('Testing SMSPool API...');
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize SMSPool service
+      const { SmsPoolService } = await import('./services/smspoolService.js');
+      const smsPoolService = new SmsPoolService();
+      
+      // Get account balance
+      await smsPoolService.getBalance();
+      
+      // Get countries
+      await smsPoolService.getCountries();
+      
+      // Get services
+      await smsPoolService.getServices();
+      
+      logger.info('✅ SMSPool API test completed successfully');
+      
+    } catch (error) {
+      logger.error(error, 'Failed to test SMSPool API');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// Test SMSPool SMS ordering command
+const testSmsPoolOrderCmd = command({
+  name: 'test-smspool-order',
+  description: 'Test SMSPool SMS ordering for a specific country',
+  args: {
+    country: option({
+      type: string,
+      long: 'country',
+      short: 'c',
+      description: 'Country code (e.g., UA, GB, ID)',
+      defaultValue: () => 'UA',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info(`Testing SMSPool SMS ordering for country: ${args.country}`);
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize SMSPool service
+      const { SmsPoolService } = await import('./services/smspoolService.js');
+      const smsPoolService = new SmsPoolService();
+      
+      // Get account balance
+      const balance = await smsPoolService.getBalance();
+      logger.info(`Current balance: ${balance}`);
+      
+      if (balance <= 0) {
+        logger.error('Insufficient balance to order SMS');
+        process.exit(1);
+      }
+      
+      // Find Upwork service
+      const upworkServiceId = await smsPoolService.findUpworkService();
+      if (!upworkServiceId) {
+        logger.error('No Upwork service found');
+        process.exit(1);
+      }
+      
+      // Order SMS
+      logger.info(`Ordering SMS for country ${args.country} with service ${upworkServiceId}...`);
+      const orderId = await smsPoolService.orderSms(args.country, upworkServiceId);
+      
+      logger.info(`✅ SMS ordered successfully! Order ID: ${orderId}`);
+      
+      // Check SMS status
+      logger.info('Checking SMS status...');
+      const order = await smsPoolService.checkSms(orderId);
+      
+      if (order) {
+        logger.info(`SMS Status: ${order.status}`);
+        logger.info(`Phone Number: ${order.phonenumber}`);
+        if (order.code) {
+          logger.info(`OTP Code: ${order.code}`);
+        }
+      }
+      
+    } catch (error) {
+      logger.error(error, 'Failed to test SMSPool SMS ordering');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
 // Check SMS messages command
 const checkSmsCmd = command({
   name: 'check-sms',
@@ -1038,6 +1141,172 @@ const waitOtpCmd = command({
   }
 });
 
+// Check specific SMS order command
+const checkSmsOrderCmd = command({
+  name: 'check-sms-order',
+  description: 'Check specific SMS order status and get OTP',
+  args: {
+    orderId: option({
+      type: string,
+      long: 'order-id',
+      short: 'o',
+      description: 'SMS order ID to check',
+      defaultValue: () => 'C5VDFHKA',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info(`Checking SMS order: ${args.orderId}`);
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize SMSPool service
+      const { SmsPoolService } = await import('./services/smspoolService.js');
+      const smsPoolService = new SmsPoolService();
+      
+      // Check SMS status
+      const order = await smsPoolService.checkSms(args.orderId);
+      
+      if (order) {
+        logger.info(`✅ SMS Order Details:`);
+        logger.info(`  Order ID: ${order.orderid}`);
+        logger.info(`  Phone Number: ${order.phonenumber}`);
+        logger.info(`  Status: ${order.status}`);
+        logger.info(`  Timestamp: ${order.timestamp}`);
+        
+        if (order.code) {
+          logger.info(`  ✅ OTP Code: ${order.code}`);
+          console.log(`OTP: ${order.code}`);
+        } else {
+          logger.info(`  ⏳ OTP Code: Not received yet`);
+        }
+        
+        if (order.completed_on) {
+          logger.info(`  Completed: ${order.completed_on}`);
+        }
+        
+        if (order.time_left) {
+          logger.info(`  Time Left: ${order.time_left}`);
+        }
+      } else {
+        logger.warn('❌ SMS order not found or check failed');
+      }
+      
+    } catch (error) {
+      logger.error(error, 'Failed to check SMS order');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// List active SMS orders command
+const listActiveOrdersCmd = command({
+  name: 'list-active-orders',
+  description: 'List all active SMS orders',
+  args: {},
+  handler: async () => {
+    try {
+      logger.info('Listing active SMS orders...');
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize SMSPool service
+      const { SmsPoolService } = await import('./services/smspoolService.js');
+      const smsPoolService = new SmsPoolService();
+      
+      // Get active orders
+      const orders = await smsPoolService.getActiveOrders();
+      
+      if (orders.length > 0) {
+        logger.info(`Found ${orders.length} active orders:`);
+        orders.forEach((order, index) => {
+          logger.info(`  ${index + 1}. Order ID: ${order.orderid}`);
+          logger.info(`     Phone: ${order.phonenumber}`);
+          logger.info(`     Status: ${order.status}`);
+          logger.info(`     Timestamp: ${order.timestamp}`);
+          if (order.code) {
+            logger.info(`     OTP Code: ${order.code}`);
+          }
+        });
+      } else {
+        logger.info('No active orders found');
+      }
+      
+    } catch (error) {
+      logger.error(error, 'Failed to list active orders');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// Check SMS by phone number command
+const checkSmsByPhoneCmd = command({
+  name: 'check-sms-by-phone',
+  description: 'Check SMS by phone number',
+  args: {
+    phone: option({
+      type: string,
+      long: 'phone',
+      short: 'p',
+      description: 'Phone number to check',
+      defaultValue: () => '447988308515',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info(`Checking SMS for phone: ${args.phone}`);
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize SMSPool service
+      const { SmsPoolService } = await import('./services/smspoolService.js');
+      const smsPoolService = new SmsPoolService();
+      
+      // Get active orders and find the one with matching phone
+      const orders = await smsPoolService.getActiveOrders();
+      const matchingOrder = orders.find(order => order.phonenumber === args.phone);
+      
+      if (matchingOrder) {
+        logger.info(`✅ Found order for phone ${args.phone}:`);
+        logger.info(`  Order ID: ${matchingOrder.orderid || 'N/A'}`);
+        logger.info(`  Phone Number: ${matchingOrder.phonenumber}`);
+        logger.info(`  Status: ${matchingOrder.status}`);
+        logger.info(`  Timestamp: ${matchingOrder.timestamp}`);
+        
+        if (matchingOrder.code && matchingOrder.code !== '0') {
+          logger.info(`  ✅ OTP Code: ${matchingOrder.code}`);
+          console.log(`OTP: ${matchingOrder.code}`);
+        } else {
+          logger.info(`  ⏳ OTP Code: Not received yet`);
+        }
+        
+        if (matchingOrder.completed_on) {
+          logger.info(`  Completed: ${matchingOrder.completed_on}`);
+        }
+        
+        if (matchingOrder.time_left) {
+          logger.info(`  Time Left: ${matchingOrder.time_left}`);
+        }
+      } else {
+        logger.warn(`❌ No order found for phone ${args.phone}`);
+      }
+      
+    } catch (error) {
+      logger.error(error, 'Failed to check SMS by phone');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
 // Main command with subcommands
 const mainCmd = command({
   name: 'up-crawler',
@@ -1113,6 +1382,21 @@ switch (commandName) {
     break;
   case 'set-manual-otp':
     await run(setManualOtpCmd, commandArgs);
+    break;
+  case 'test-smspool':
+    await run(testSmsPoolCmd, commandArgs);
+    break;
+  case 'test-smspool-order':
+    await run(testSmsPoolOrderCmd, commandArgs);
+    break;
+  case 'check-sms-order':
+    await run(checkSmsOrderCmd, commandArgs);
+    break;
+  case 'list-active-orders':
+    await run(listActiveOrdersCmd, commandArgs);
+    break;
+  case 'check-sms-by-phone':
+    await run(checkSmsByPhoneCmd, commandArgs);
     break;
   default:
     await run(mainCmd, process.argv.slice(2));

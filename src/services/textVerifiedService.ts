@@ -428,6 +428,20 @@ export class TextVerifiedService {
         throw new Error(`User with ID ${userId} not found`);
       }
       
+      // Check if we should use SMSPool for non-US countries
+      const supportedSmsPoolCountries = ['GB', 'UA', 'ID'];
+      if (supportedSmsPoolCountries.includes(user.country_code.toUpperCase())) {
+        logger.info(`User country ${user.country_code} is supported by SMSPool, using SMSPool service`);
+        try {
+          const { SmsPoolService } = await import('./smspoolService.js');
+          const smsPoolService = new SmsPoolService();
+          return await smsPoolService.waitForOTP(userId, user.country_code, timeoutSeconds);
+        } catch (error) {
+          logger.error('SMSPool service failed, falling back to TextVerified:', error);
+          // Continue with TextVerified as fallback
+        }
+      }
+      
       // Log user's phone number from database
       if (user.phone) {
         logger.info(`📱 Raw phone number from database: "${user.phone}"`);

@@ -777,6 +777,12 @@ export class LocationStepHandler extends StepHandler {
     try {
       logger.info('Filling phone number...');
 
+      // Generate OTP before filling phone number
+      const otpResult = await this.generateOTPBeforePhoneFill();
+      if (otpResult.status !== 'success') {
+        logger.warn('OTP generation failed, continuing with phone number fill');
+      }
+
       // Look for the phone number input field
       const phoneField = await this.waitForSelectorWithRetry([
         '.air3-phone-number-remaining',
@@ -847,6 +853,101 @@ export class LocationStepHandler extends StepHandler {
 
     } catch (error) {
       return this.createError('PHONE_FILL_FAILED', `Failed to fill phone number: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async generateOTPBeforePhoneFill(): Promise<AutomationResult> {
+    try {
+      logger.info('Generating OTP before phone number fill...');
+      
+      // Determine OTP provider based on country code
+      const supportedSmsPoolCountries = ['GB', 'UA', 'ID'];
+      const supportedSmsManCountries = ['US', 'CA', 'AU', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'CH'];
+      
+      let otpProvider = 'textverified'; // default
+      let otpCode: string | null = null;
+      
+      if (supportedSmsPoolCountries.includes(this.user.country_code.toUpperCase())) {
+        // Use SMSPool for supported countries
+        logger.info(`User country ${this.user.country_code} is supported by SMSPool`);
+        try {
+          const { SmsPoolService } = await import('../../services/smspoolService.js');
+          const smsPoolService = new SmsPoolService();
+          
+          // Order SMS and get OTP
+          otpCode = await smsPoolService.waitForOTP(this.user.id, this.user.country_code, 180);
+          if (otpCode) {
+            otpProvider = 'sms_pool';
+            logger.info(`✅ OTP generated via SMSPool: ${otpCode}`);
+          }
+        } catch (error) {
+          logger.error('SMSPool failed, trying SMS-Man fallback:', error);
+        }
+      }
+      
+      if (!otpCode && supportedSmsManCountries.includes(this.user.country_code.toUpperCase())) {
+        // Use SMS-Man for supported countries
+        logger.info(`User country ${this.user.country_code} is supported by SMS-Man`);
+        try {
+          // TODO: Implement SMS-Man service
+          // const { SmsManService } = await import('../../services/smsManService.js');
+          // const smsManService = new SmsManService();
+          // otpCode = await smsManService.waitForOTP(this.user.id, this.user.country_code, 180);
+          // if (otpCode) {
+          //   otpProvider = 'sms_man';
+          //   logger.info(`✅ OTP generated via SMS-Man: ${otpCode}`);
+          // }
+          logger.info('SMS-Man service not implemented yet, using TextVerified fallback');
+        } catch (error) {
+          logger.error('SMS-Man failed, using TextVerified fallback:', error);
+        }
+      }
+      
+      if (!otpCode) {
+        // Fallback to TextVerified
+        logger.info('Using TextVerified as fallback OTP provider');
+        try {
+          const textVerifiedService = new TextVerifiedService();
+          otpCode = await textVerifiedService.waitForOTP(this.user.id, 180);
+          if (otpCode) {
+            otpProvider = 'textverified';
+            logger.info(`✅ OTP generated via TextVerified: ${otpCode}`);
+          }
+        } catch (error) {
+          logger.error('TextVerified also failed:', error);
+        }
+      }
+      
+      // Save OTP provider to user record
+      if (otpCode) {
+        await this.saveOTPProvider(otpProvider);
+        logger.info(`OTP provider saved: ${otpProvider}`);
+      } else {
+        logger.warn('No OTP generated from any provider');
+      }
+      
+      return this.createSuccess();
+      
+    } catch (error) {
+      logger.error('OTP generation failed:', error);
+      return this.createError('OTP_GENERATION_FAILED', `Failed to generate OTP: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async saveOTPProvider(provider: string): Promise<void> {
+    try {
+      const { getDatabase } = await import('../../database/connection.js');
+      const db = getDatabase();
+      
+      await db
+        .updateTable('users')
+        .set({ otp_provider: provider })
+        .where('id', '=', this.user.id)
+        .execute();
+      
+      logger.info(`Updated user ${this.user.id} with OTP provider: ${provider}`);
+    } catch (error) {
+      logger.error('Failed to save OTP provider:', error);
     }
   }
 
