@@ -158,12 +158,14 @@ npm start wait-otp -- --user-id 1 --timeout 60
 
 # Incorrect syntax (flags won't be recognized):
 npm start visit-login --debug --headless  # ❌ Wrong
+npm start visit-login --keep-open  # ❌ Wrong (missing --)
 ```
 
-**Alternative**: You can also run commands directly:
+**Alternative**: You can also run commands directly (useful for debugging or when you want to avoid npm argument parsing):
 ```bash
 # Direct execution (no npm start needed):
 node dist/main.js visit-login --debug --headless
+node dist/main.js visit-login --keep-open
 node dist/main.js process-users --limit 5 --headless
 node dist/main.js process-users --upload --no-stealth
 node dist/main.js process-users --restore-session --no-stealth
@@ -186,16 +188,16 @@ npm start visit-login -- --user-id 6
 npm start visit-login -- --headless
 
 # Keep browser open indefinitely
-npm start visit-login -- --keep-open
+npm start -- visit-login --keep-open
 
 # Debug mode: check if already logged in without performing login
 npm start visit-login -- --debug
 
 # Debug mode with headless and keep open
-npm start visit-login -- --debug --headless --keep-open
+npm start -- visit-login --debug --headless --keep-open
 
 # Combine options: user-specific browser with keep-open
-npm start visit-login -- --user-id 6 --keep-open
+npm start -- visit-login --user-id 6 --keep-open
 ```
 
 **User-Specific Features:**

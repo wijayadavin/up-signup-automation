@@ -92,6 +92,7 @@ export class WelcomeStepHandler extends StepHandler {
     if (url.includes('/overview')) return 'overview';
     if (url.includes('/rate')) return 'rate';
     if (url.includes('/location')) return 'location';
+    if (url.includes('/general')) return 'general';
     if (url.includes('/submit')) return 'submit';
     
     // If we're on the create-profile page but not on a specific step, we're at the initial page

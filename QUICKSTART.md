@@ -25,7 +25,7 @@
    
    Edit `.env` with your database configuration:
    ```env
-   DATABASE_URL=postgresql://username:password@localhost:5432/up_crawler
+   DATABASE_URL=postgresql://username:password@localhost:5433/up_crawler
    LOG_LEVEL=info
    PUPPETEER_HEADLESS=false
    PUPPETEER_TIMEOUT=30000

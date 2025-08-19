@@ -59,6 +59,13 @@ const visitLoginPageCmd = command({
       description: 'Disable proxy testing and use direct connection',
       defaultValue: () => false,
     }),
+    noStealth: flag({
+      type: boolean,
+      long: 'no-stealth',
+      short: 's',
+      description: 'Disable stealth mode for debugging (use normal browser behavior)',
+      defaultValue: () => false,
+    }),
   },
   handler: async (args) => {
     let upworkService: UpworkService | null = null;
@@ -72,7 +79,8 @@ const visitLoginPageCmd = command({
       // Initialize services
       const browserManager = new BrowserManager({ 
         headless: args.headless,
-        skipProxyTest: args.noProxy
+        skipProxyTest: args.noProxy,
+        disableTrackingProtection: args.noStealth // Enable normal browser behavior when no-stealth is used
       });
       const userService = new UserService();
       upworkService = new UpworkService(browserManager, userService);
@@ -82,6 +90,10 @@ const visitLoginPageCmd = command({
       
       // Visit login page
       logger.info(`User ID: ${userId || 'none'}, Keep open mode: ${args.keepOpen}, Debug mode: ${args.debug}`);
+      
+      if (args.noStealth) {
+        logger.info('No-stealth mode enabled: using normal browser behavior for debugging');
+      }
       
       let success: boolean;
       if (args.debug) {

@@ -128,7 +128,7 @@ export class LoginAutomation extends BaseAutomation {
         logger.info(`Forcing navigation to step: ${options.step}`);
         await this.page.goto(`https://www.upwork.com/nx/create-profile/${options.step}`, {
           waitUntil: 'networkidle2',
-          timeout: 10000,
+          timeout: 15000,
         });
         await this.randomDelay(1000, 1700);
         
@@ -540,7 +540,7 @@ export class LoginAutomation extends BaseAutomation {
         return this.createSuccess('done');
       }
 
-      const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location'];
+      const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'general'];
       let currentStepIndex = this.getStepIndex(currentStep);
       
       // Execute remaining steps in order
@@ -692,11 +692,13 @@ export class LoginAutomation extends BaseAutomation {
     if (url.includes('/overview')) return 'overview';
     if (url.includes('/rate')) return 'rate';
     if (url.includes('/location')) return 'location';
+    if (url.includes('/general')) return 'general';
+    if (url.includes('/submit')) return 'submit';
     return 'initial';
   }
 
   private getStepIndex(stepName: string): number {
-    const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location'];
+          const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'general'];
     const index = steps.indexOf(stepName);
     return index === -1 ? 0 : index;
   }
