@@ -51,7 +51,7 @@ export class ResumeGenerator {
         case 'US': return 'United States';
         case 'ID': return 'Indonesia';
         case 'UA': return 'Ukraine';
-        case 'UK': return 'United Kingdom';
+        case 'GB': return 'United Kingdom';
         default: return 'United States';
       }
     };
@@ -358,7 +358,7 @@ export class ResumeGenerator {
     // Add country code based on user's country
     const countryCodeMap: { [key: string]: string } = {
       'US': '+1',
-      'UK': '+44', 
+      'GB': '+44', 
       'UA': '+380',
       'ID': '+62'
     };

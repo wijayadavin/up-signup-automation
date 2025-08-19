@@ -2,7 +2,7 @@ import { Page } from 'puppeteer';
 import { User } from '../../types/database';
 import { StepHandler } from '../StepHandler';
 import { AutomationResult } from '../BaseAutomation';
-import { TextVerifiedService } from '../../services/textVerifiedService.js';
+// import { TextVerifiedService } from '../../services/textVerifiedService.js';
 import path from 'path';
 import fs from 'fs';
 
@@ -36,6 +36,13 @@ export class LocationStepHandler extends StepHandler {
       const isSkipOtpMode = options?.skipOtp;
       if (isSkipOtpMode) {
         logger.info('Skip-OTP mode enabled: Will fill location normally but use default OTP (12345)');
+      } else {
+        // Order SMS early in the process so OTP is ready when needed
+        logger.info('Ordering SMS early in location step...');
+        const otpOrderingResult = await this.generateOTPEarly();
+        if (otpOrderingResult.status !== 'success') {
+          logger.warn('Early SMS ordering failed, but continuing with location step...');
+        }
       }
 
       // Normal mode: Fill all fields
@@ -53,8 +60,8 @@ export class LocationStepHandler extends StepHandler {
         return addressResult;
       }
 
-      // Fill phone number
-      const phoneResult = await this.fillPhoneNumber();
+      // Fill phone number (without generating OTP yet)
+      const phoneResult = await this.fillPhoneNumberWithoutOTP();
       if (phoneResult.status !== 'success') {
         return phoneResult;
       }
@@ -86,11 +93,11 @@ export class LocationStepHandler extends StepHandler {
         await this.clickElement(nextButton);
         logger.info('Next button clicked, waiting for phone verification modal...');
         
-        // Wait for phone verification modal to appear
-        const phoneVerificationResult = await this.handlePhoneVerificationModal(isSkipOtpMode);
-        if (phoneVerificationResult.status !== 'success') {
-          return phoneVerificationResult;
-        }
+      // Wait for phone verification modal to appear and handle OTP
+      const phoneVerificationResult = await this.handlePhoneVerificationModal(isSkipOtpMode);
+      if (phoneVerificationResult.status !== 'success') {
+        return phoneVerificationResult;
+      }
         
         logger.info('Location step completed successfully with phone verification');
         return this.createSuccess();
@@ -123,8 +130,7 @@ export class LocationStepHandler extends StepHandler {
       // Format date based on country code
       const getDateFormat = (countryCode: string) => {
         switch (countryCode.toUpperCase()) {
-          case 'UK':
-          case 'GB':
+          case 'GB': // United Kingdom
           case 'UA': // Ukraine
             return 'yyyy-mm-dd';
           case 'ID': // Indonesia
@@ -633,6 +639,12 @@ export class LocationStepHandler extends StepHandler {
 
   private async uploadProfilePhoto(): Promise<AutomationResult> {
     try {
+      // Check if avatar was already uploaded
+      if (this.user.avatar_uploaded_at) {
+        logger.info(`Avatar already uploaded at ${this.user.avatar_uploaded_at}, skipping photo upload`);
+        return this.createSuccess();
+      }
+
       logger.info('Uploading profile photo...');
 
       // Look for file input directly first (might be hidden but accessible)
@@ -768,20 +780,17 @@ export class LocationStepHandler extends StepHandler {
     
     await this.randomDelay(2000, 3000);
 
+    // Save avatar upload timestamp to database
+    await this.saveAvatarUploadedAt();
+    
     logger.info('Profile photo upload completed successfully');
     
     return this.createSuccess();
   }
 
-  private async fillPhoneNumber(): Promise<AutomationResult> {
+  private async fillPhoneNumberWithoutOTP(): Promise<AutomationResult> {
     try {
-      logger.info('Filling phone number...');
-
-      // Generate OTP before filling phone number
-      const otpResult = await this.generateOTPBeforePhoneFill();
-      if (otpResult.status !== 'success') {
-        logger.warn('OTP generation failed, continuing with phone number fill');
-      }
+      logger.info('Filling phone number (without OTP generation)...');
 
       // Look for the phone number input field
       const phoneField = await this.waitForSelectorWithRetry([
@@ -795,13 +804,59 @@ export class LocationStepHandler extends StepHandler {
         return this.createError('PHONE_FIELD_NOT_FOUND', 'Phone number field not found');
       }
 
-      // Use user's phone if available, otherwise use default
-      const phoneNumber = this.user.phone || '5550123456';
+      // Get or generate phone number
+      let phoneNumber: string | null = null;
+      let cleanPhone: string | null = null;
       
-      // Clean phone number (remove any non-digit characters, no country code needed)
-      const cleanPhone = phoneNumber.replace(/\D/g, '');
+      if (this.user.phone) {
+        // Check if existing phone number is still active
+        logger.info(`Checking if existing phone number ${this.user.phone} is still active...`);
+        const isActive = await this.checkIfPhoneNumberIsActive(this.user.phone!, this.user.otp_provider || '');
+        
+        if (isActive && this.user.phone) {
+          // Use existing phone number from user
+          phoneNumber = this.user.phone;
+          cleanPhone = phoneNumber.replace(/\D/g, '');
+          logger.info(`✅ Using existing active phone number: ${phoneNumber} (clean: ${cleanPhone})`);
+        } else {
+          logger.warn(`❌ Existing phone number ${this.user.phone} is no longer active, will generate new one`);
+          // Clear the inactive phone number so a new one will be generated
+          this.user.phone = null;
+          this.user.otp_provider = null;
+        }
+      }
       
-      logger.info(`Setting phone number: ${phoneNumber} (clean: ${cleanPhone})`);
+      if (!phoneNumber) {
+        // Generate new phone number using SMSPool
+        logger.info('No existing phone number, generating new one via SMSPool...');
+        try {
+          const { SmsPoolService } = await import('../../services/smspoolService.js');
+          const smsPoolService = new SmsPoolService();
+          
+          // Order SMS to get a phone number (we'll get the OTP later)
+          const orderResult = await smsPoolService.orderSms(this.user.country_code);
+          
+          if (orderResult.phoneNumber) {
+            phoneNumber = orderResult.phoneNumber;
+            cleanPhone = phoneNumber.replace(/\D/g, '');
+            logger.info(`Generated new phone number via SMSPool: ${phoneNumber} (clean: ${cleanPhone})`);
+            
+            // Save the phone number and provider to the database
+            await this.savePhoneNumberAndProvider(phoneNumber, 'SMS_POOL');
+            logger.info(`Saved phone number ${phoneNumber} and provider SMS_POOL to database`);
+            
+            // Update the user object to reflect the new phone number
+            this.user.phone = phoneNumber;
+            this.user.otp_provider = 'SMS_POOL';
+          } else {
+            logger.error('Failed to get phone number from SMSPool order');
+            return this.createError('PHONE_GENERATION_FAILED', 'Failed to generate phone number via SMSPool');
+          }
+        } catch (error) {
+          logger.error('Failed to generate phone number via SMSPool:', error);
+          return this.createError('PHONE_GENERATION_FAILED', `Failed to generate phone number: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
       
       // Clear and type the phone number with multiple attempts
       let attempts = 0;
@@ -823,6 +878,10 @@ export class LocationStepHandler extends StepHandler {
         await this.randomDelay(500, 1000);
         
         // Type the phone number character by character
+        if (!cleanPhone) {
+          logger.error('cleanPhone is null, cannot type phone number');
+          return this.createError('PHONE_INPUT_FAILED', 'Phone number is null, cannot type');
+        }
         await phoneField.type(cleanPhone, { delay: 100 });
         await this.randomDelay(1000, 1500);
         
@@ -856,81 +915,25 @@ export class LocationStepHandler extends StepHandler {
     }
   }
 
-  private async generateOTPBeforePhoneFill(): Promise<AutomationResult> {
+
+
+  private async savePhoneNumberAndProvider(phoneNumber: string, provider: string): Promise<void> {
     try {
-      logger.info('Generating OTP before phone number fill...');
+      const { getDatabase } = await import('../../database/connection.js');
+      const db = getDatabase();
       
-      // Determine OTP provider based on country code
-      const supportedSmsPoolCountries = ['GB', 'UA', 'ID'];
-      const supportedSmsManCountries = ['US', 'CA', 'AU', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'CH'];
+      await db
+        .updateTable('users')
+        .set({ 
+          phone: phoneNumber,
+          otp_provider: provider 
+        })
+        .where('id', '=', this.user.id)
+        .execute();
       
-      let otpProvider = 'textverified'; // default
-      let otpCode: string | null = null;
-      
-      if (supportedSmsPoolCountries.includes(this.user.country_code.toUpperCase())) {
-        // Use SMSPool for supported countries
-        logger.info(`User country ${this.user.country_code} is supported by SMSPool`);
-        try {
-          const { SmsPoolService } = await import('../../services/smspoolService.js');
-          const smsPoolService = new SmsPoolService();
-          
-          // Order SMS and get OTP
-          otpCode = await smsPoolService.waitForOTP(this.user.id, this.user.country_code, 180);
-          if (otpCode) {
-            otpProvider = 'sms_pool';
-            logger.info(`✅ OTP generated via SMSPool: ${otpCode}`);
-          }
-        } catch (error) {
-          logger.error('SMSPool failed, trying SMS-Man fallback:', error);
-        }
-      }
-      
-      if (!otpCode && supportedSmsManCountries.includes(this.user.country_code.toUpperCase())) {
-        // Use SMS-Man for supported countries
-        logger.info(`User country ${this.user.country_code} is supported by SMS-Man`);
-        try {
-          // TODO: Implement SMS-Man service
-          // const { SmsManService } = await import('../../services/smsManService.js');
-          // const smsManService = new SmsManService();
-          // otpCode = await smsManService.waitForOTP(this.user.id, this.user.country_code, 180);
-          // if (otpCode) {
-          //   otpProvider = 'sms_man';
-          //   logger.info(`✅ OTP generated via SMS-Man: ${otpCode}`);
-          // }
-          logger.info('SMS-Man service not implemented yet, using TextVerified fallback');
-        } catch (error) {
-          logger.error('SMS-Man failed, using TextVerified fallback:', error);
-        }
-      }
-      
-      if (!otpCode) {
-        // Fallback to TextVerified
-        logger.info('Using TextVerified as fallback OTP provider');
-        try {
-          const textVerifiedService = new TextVerifiedService();
-          otpCode = await textVerifiedService.waitForOTP(this.user.id, 180);
-          if (otpCode) {
-            otpProvider = 'textverified';
-            logger.info(`✅ OTP generated via TextVerified: ${otpCode}`);
-          }
-        } catch (error) {
-          logger.error('TextVerified also failed:', error);
-        }
-      }
-      
-      // Save OTP provider to user record
-      if (otpCode) {
-        await this.saveOTPProvider(otpProvider);
-        logger.info(`OTP provider saved: ${otpProvider}`);
-      } else {
-        logger.warn('No OTP generated from any provider');
-      }
-      
-      return this.createSuccess();
-      
+      logger.info(`Updated user ${this.user.id} with phone: ${phoneNumber}, provider: ${provider}`);
     } catch (error) {
-      logger.error('OTP generation failed:', error);
-      return this.createError('OTP_GENERATION_FAILED', `Failed to generate OTP: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      logger.error('Failed to save phone number and provider:', error);
     }
   }
 
@@ -951,6 +954,363 @@ export class LocationStepHandler extends StepHandler {
     }
   }
 
+  private async saveAvatarUploadedAt(): Promise<void> {
+    try {
+      const { getDatabase } = await import('../../database/connection.js');
+      const db = getDatabase();
+      
+      const currentTime = new Date();
+      
+      await db
+        .updateTable('users')
+        .set({ avatar_uploaded_at: currentTime })
+        .where('id', '=', this.user.id)
+        .execute();
+      
+      // Update the user object to reflect the change
+      this.user.avatar_uploaded_at = currentTime;
+      
+      logger.info(`Updated user ${this.user.id} with avatar_uploaded_at: ${currentTime}`);
+    } catch (error) {
+      logger.error('Failed to save avatar upload timestamp:', error);
+    }
+  }
+
+  private async generateOTPEarly(): Promise<AutomationResult> {
+    try {
+      logger.info('Starting early SMS ordering...');
+      
+      // Check if user already has phone and provider set
+      if (this.user.phone && this.user.otp_provider) {
+        logger.info(`User already has phone ${this.user.phone} and provider ${this.user.otp_provider}, checking if still active and has OTP...`);
+        
+        // Check if the existing phone number is still active
+        const isActive = await this.checkIfPhoneNumberIsActive(this.user.phone, this.user.otp_provider);
+        
+        if (isActive) {
+          // Check if we already have an OTP for this phone number
+          if (this.user.otp) {
+            logger.info(`✅ Phone number ${this.user.phone} is still active and has OTP ${this.user.otp}, skipping SMS ordering`);
+            return this.createSuccess();
+          } else {
+            logger.info(`✅ Phone number ${this.user.phone} is still active but no OTP yet, will check for OTP later`);
+            return this.createSuccess();
+          }
+        } else {
+          logger.warn(`❌ Phone number ${this.user.phone} is no longer active, will generate new one`);
+          // Clear the inactive phone number from user object so a new one will be generated
+          this.user.phone = null;
+          this.user.otp_provider = null;
+        }
+      }
+      
+      // Determine OTP provider based on country code
+      const supportedSmsPoolCountries = ['GB', 'UA', 'ID', 'US', 'CA', 'AU', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'CH'];
+      const supportedSmsManCountries = ['US', 'CA', 'AU', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'CH'];
+      
+      let otpProvider = 'SMS_POOL'; // default to SMSPool
+      let orderSuccess = false;
+      
+      // Try SMSPool first (primary provider)
+      if (supportedSmsPoolCountries.includes(this.user.country_code.toUpperCase())) {
+        logger.info(`User country ${this.user.country_code} is supported by SMSPool (primary provider)`);
+        try {
+          const { SmsPoolService } = await import('../../services/smspoolService.js');
+          const smsPoolService = new SmsPoolService();
+          
+          // Only order SMS, don't wait for OTP
+          const orderResult = await smsPoolService.orderSms(this.user.country_code);
+          if (orderResult.orderId) {
+            otpProvider = 'SMS_POOL';
+            logger.info(`✅ SMS ordered via SMSPool: ${orderResult.orderId}, phone: ${orderResult.phoneNumber || 'not provided'}`);
+            orderSuccess = true;
+          }
+        } catch (error) {
+          logger.error('SMSPool failed, trying SMS-Man fallback:', error);
+        }
+      }
+      
+      // Try SMS-Man as backup
+      if (!orderSuccess && supportedSmsManCountries.includes(this.user.country_code.toUpperCase())) {
+        logger.info(`User country ${this.user.country_code} is supported by SMS-Man (backup provider)`);
+        try {
+          const { SmsManService } = await import('../../services/smsManService.js');
+          const smsManService = new SmsManService();
+          
+          // Only order SMS, don't wait for OTP
+          const orderResult = await smsManService.orderSms(this.user.country_code);
+          if (orderResult.orderId) {
+            otpProvider = 'SMS_MAN';
+            logger.info(`✅ SMS ordered via SMS-Man: ${orderResult.orderId}, phone: ${orderResult.phoneNumber || 'not provided'}`);
+            orderSuccess = true;
+          }
+        } catch (error) {
+          logger.error('SMS-Man failed:', error);
+        }
+      }
+      
+      // Save OTP provider to user record
+      if (orderSuccess) {
+        await this.saveOTPProvider(otpProvider);
+        logger.info(`OTP provider saved: ${otpProvider}`);
+      } else {
+        logger.warn('No SMS order created from any provider');
+      }
+      
+      return this.createSuccess();
+      
+    } catch (error) {
+      logger.error('Early SMS ordering failed:', error);
+      return this.createError('EARLY_SMS_ORDERING_FAILED', `Failed to order SMS early: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async checkIfPhoneNumberIsActive(phoneNumber: string, provider: string): Promise<boolean> {
+    try {
+      logger.info(`Checking if phone number ${phoneNumber} is still active with provider ${provider}...`);
+      
+      if (provider === 'SMS_POOL') {
+          try {
+            const { SmsPoolService } = await import('../../services/smspoolService.js');
+            const smsPoolService = new SmsPoolService();
+            
+            // First check active orders from SMSPool
+            logger.info(`Checking active orders for phone ${phoneNumber}...`);
+            const activeOrders = await smsPoolService.getActiveOrders();
+            
+            // Check if any active order matches this phone number
+            let matchingOrder = activeOrders.find(order => {
+              const orderPhone = order.phonenumber || '';
+              const cleanOrderPhone = orderPhone.replace(/\D/g, '');
+              const cleanUserPhone = phoneNumber.replace(/\D/g, '');
+              
+              return orderPhone === phoneNumber || 
+                     cleanOrderPhone === cleanUserPhone ||
+                     orderPhone.includes(cleanUserPhone) ||
+                     cleanOrderPhone.includes(cleanUserPhone);
+            });
+            
+            if (matchingOrder) {
+              const orderId = matchingOrder.order_code || matchingOrder.orderid || 'unknown';
+              logger.info(`✅ Found active order for phone ${phoneNumber}: ${orderId}`);
+              return true;
+            }
+            
+            // If no active order found, check history orders
+            logger.info(`No active order found, checking history orders for phone ${phoneNumber}...`);
+            const historyOrders = await smsPoolService.getHistoryOrders();
+            
+            // Check if any history order matches this phone number
+            matchingOrder = historyOrders.find(order => {
+              const orderPhone = order.phonenumber || '';
+              const cleanOrderPhone = orderPhone.replace(/\D/g, '');
+              const cleanUserPhone = phoneNumber.replace(/\D/g, '');
+              
+              return orderPhone === phoneNumber || 
+                     cleanOrderPhone === cleanUserPhone ||
+                     orderPhone.includes(cleanUserPhone) ||
+                     cleanOrderPhone.includes(cleanUserPhone);
+            });
+            
+            if (matchingOrder) {
+              const orderId = matchingOrder.order_code || matchingOrder.orderid || 'unknown';
+              logger.info(`✅ Found history order for phone ${phoneNumber}: ${orderId} (status: ${matchingOrder.status})`);
+              
+              // Check if the history order is still valid (not expired)
+              if (matchingOrder.expiry && typeof matchingOrder.expiry === 'number') {
+                const expiryTime = new Date(matchingOrder.expiry * 1000);
+                const now = new Date();
+                if (expiryTime > now) {
+                  logger.info(`✅ History order is still valid (expires: ${expiryTime})`);
+                  return true;
+                } else {
+                  logger.warn(`❌ History order has expired (expired: ${expiryTime})`);
+                  return false;
+                }
+              } else {
+                // If no expiry info, assume it's still valid
+                logger.info(`✅ History order found (no expiry info, assuming valid)`);
+                return true;
+              }
+            } else {
+              logger.warn(`❌ No order found in active or history for phone ${phoneNumber}`);
+              return false;
+            }
+          } catch (error) {
+            logger.warn(`Failed to check SMSPool orders: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return false;
+          }
+        } else if (provider === 'SMS_MAN') {
+        try {
+          const { SmsManService } = await import('../../services/smsManService.js');
+          const smsManService = new SmsManService();
+          
+          // Get active orders from SMS-Man
+          const activeOrders = await smsManService.getActiveOrders();
+          
+          // Check if any active order matches this phone number
+          const matchingOrder = activeOrders.find(order => {
+            const orderPhone = order.phonenumber || '';
+            const cleanOrderPhone = orderPhone.replace(/\D/g, '');
+            const cleanUserPhone = phoneNumber.replace(/\D/g, '');
+            
+            return orderPhone === phoneNumber || 
+                   cleanOrderPhone === cleanUserPhone ||
+                   orderPhone.includes(cleanUserPhone) ||
+                   cleanOrderPhone.includes(cleanUserPhone);
+          });
+          
+          if (matchingOrder) {
+            const orderId = matchingOrder.order_code || matchingOrder.orderid || 'unknown';
+            logger.info(`✅ Found active order for phone ${phoneNumber}: ${orderId}`);
+            return true;
+          } else {
+            logger.warn(`❌ No active order found for phone ${phoneNumber}`);
+            return false;
+          }
+        } catch (error) {
+          logger.warn(`Failed to check SMS-Man active orders: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          return false;
+        }
+      }
+      
+      logger.warn(`Unknown provider ${provider}, assuming phone number is inactive`);
+      return false;
+      
+    } catch (error) {
+      logger.error(`Error checking if phone number is active: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return false;
+    }
+  }
+
+  private async checkForOTPAfterModalOpen(skipOtp: boolean = false): Promise<string | null> {
+    try {
+      logger.info('Checking for OTP after modal is opened...');
+      
+      // First, check if we already have an OTP in the database
+      if (this.user.otp) {
+        const otpCode = this.user.otp.toString();
+        logger.info(`✅ Using existing OTP from database: ${otpCode}`);
+        return otpCode;
+      }
+      
+      // If no OTP in database, check if phone number is still valid first
+      if (this.user.phone && this.user.otp_provider) {
+        logger.info(`User has phone ${this.user.phone} and provider ${this.user.otp_provider}, checking if still valid...`);
+        
+        // Check if the phone number is still active/valid
+        const isActive = await this.checkIfPhoneNumberIsActive(this.user.phone, this.user.otp_provider);
+        
+        if (!isActive) {
+          logger.warn(`❌ Phone number ${this.user.phone} is no longer active, cannot get OTP`);
+          return null;
+        }
+        
+        logger.info(`✅ Phone number ${this.user.phone} is still active, checking for existing OTP...`);
+        
+        if (this.user.otp_provider === 'SMS_POOL') {
+          try {
+            const { SmsPoolService } = await import('../../services/smspoolService.js');
+            const smsPoolService = new SmsPoolService();
+            const otpCode = await smsPoolService.waitForOTP(this.user.id, this.user.country_code, 360); // 6 minutes timeout
+            if (otpCode) {
+              logger.info(`✅ Received existing OTP from SMSPool: ${otpCode}`);
+              return otpCode;
+            } else {
+              logger.warn('No OTP received from SMSPool within 3 minutes');
+            }
+          } catch (error) {
+            logger.warn('Failed to get existing SMSPool OTP:', error);
+          }
+        } else if (this.user.otp_provider === 'SMS_MAN') {
+          try {
+            const { SmsManService } = await import('../../services/smsManService.js');
+            const smsManService = new SmsManService();
+            const otpCode = await smsManService.waitForOTP(this.user.id, this.user.country_code, 360); // 6 minutes timeout
+            if (otpCode) {
+              logger.info(`✅ Received existing OTP from SMS-Man: ${otpCode}`);
+              return otpCode;
+            } else {
+              logger.warn('No OTP received from SMS-Man within 6 minutes');
+            }
+          } catch (error) {
+            logger.warn('Failed to get existing SMS-Man OTP:', error);
+          }
+        }
+      }
+      
+      // If no existing OTP found, handle based on skipOtp mode
+      if (skipOtp) {
+        logger.info('Skip-OTP mode: Using manual OTP service');
+        try {
+          const { ManualOtpService } = await import('../../services/manualOtpService.js');
+          const manualOtpService = new ManualOtpService();
+          
+          // Wait for manual OTP (3 minutes timeout, check every 5 seconds)
+          const manualOtp = await manualOtpService.waitForManualOtp(this.user.id, 3, 5);
+          
+          if (manualOtp) {
+            logger.info(`✅ Received manual OTP: ${manualOtp}`);
+            return manualOtp;
+          } else {
+            logger.error('Manual OTP timeout after 3 minutes');
+            return null;
+          }
+        } catch (error) {
+          logger.error(`Failed to get manual OTP: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          return null;
+        }
+      } else {
+        // Try to generate new OTP as fallback
+        logger.warn('No existing OTP found, trying to generate new one as fallback...');
+        
+        // Try SMSPool first (primary provider)
+        try {
+          const { SmsPoolService } = await import('../../services/smspoolService.js');
+          const smsPoolService = new SmsPoolService();
+          
+          const otpCode = await smsPoolService.waitForOTP(this.user.id, this.user.country_code, 360); // 6 minutes timeout
+          
+          if (otpCode) {
+            logger.info(`✅ Received new OTP from SMSPool: ${otpCode}`);
+            return otpCode;
+          } else {
+            logger.error('No OTP received from SMSPool within 6 minutes');
+            return null;
+          }
+          
+        } catch (error) {
+          logger.error('Failed to get OTP from SMSPool:', error);
+          
+          // Try SMS-Man as fallback
+          logger.warn('SMSPool failed, trying SMS-Man as fallback...');
+          try {
+            const { SmsManService } = await import('../../services/smsManService.js');
+            const smsManService = new SmsManService();
+            const otpCode = await smsManService.waitForOTP(this.user.id, this.user.country_code, 360); // 6 minutes timeout
+            
+            if (otpCode) {
+              logger.info(`✅ Received OTP from SMS-Man: ${otpCode}`);
+              return otpCode;
+            } else {
+              logger.error('No OTP received from SMS-Man within 6 minutes');
+              return null;
+            }
+          } catch (smsManError) {
+            logger.error('SMS-Man also failed:', smsManError);
+            // Both providers failed
+            logger.error('All OTP providers failed, cannot proceed');
+            return null;
+          }
+        }
+      }
+      
+    } catch (error) {
+      logger.error('Error checking for OTP after modal open:', error);
+      return null;
+    }
+  }
+
   private formatPhoneNumberWithCountryCode(phoneNumber: string, countryCode: string): string {
     // Remove any non-digit characters first
     let cleanNumber = phoneNumber.replace(/\D/g, '');
@@ -958,7 +1318,7 @@ export class LocationStepHandler extends StepHandler {
     // Add country code based on user's country
     const countryCodeMap: { [key: string]: string } = {
       'US': '+1',
-      'UK': '+44', 
+      'GB': '+44', 
       'UA': '+380',
       'ID': '+62'
     };
@@ -981,20 +1341,19 @@ export class LocationStepHandler extends StepHandler {
 
   private async handlePhoneVerificationModal(skipOtp: boolean = false): Promise<AutomationResult> {
     try {
-      logger.info('Waiting for phone verification modal...');
+      logger.info('Waiting for phone verification modal with retries...');
       
-      // Wait for the phone verification modal to appear with multiple attempts
-      let modalElement = null;
-      let attempts = 0;
-      const maxAttempts = 3;
+      // Try up to 3 times to find the phone verification modal with longer delays
+      let modalFound = false;
+      let phoneVerificationModalFound = false;
+      const maxRetries = 3;
       
-      while (!modalElement && attempts < maxAttempts) {
-        attempts++;
-        logger.info(`Attempt ${attempts}/${maxAttempts} to find phone verification modal...`);
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        logger.info(`Modal detection attempt ${attempt}/${maxRetries}...`);
         
-        // Check for either "send verification" modal or "enter your code" modal
-        // First check for "send verification" modal with more specific selectors
-        const sendVerificationModal = await this.waitForSelectorWithRetry([
+        // Check for both phone verification modal AND OTP modal simultaneously
+        logger.info(`Attempting to find phone verification modal on attempt ${attempt}...`);
+        const phoneVerificationModal = await this.waitForSelectorWithRetry([
           'h3:contains("Please verify your phone number")',
           'h3.mb-0:contains("verify your phone number")',
           '.air3-grid-container h3:contains("verify")',
@@ -1002,189 +1361,208 @@ export class LocationStepHandler extends StepHandler {
           '[data-ev-label="submit_phone"]', // Send code button
           'button#submitPhone',
           'button:contains("Send code")',
-          '.air3-btn-primary:contains("Send code")'
-        ], 5000);
+          '.air3-btn-primary:contains("Send code")',
+          // Additional selectors for different modal states
+          '.air3-modal-content h3:contains("verify")',
+          '.air3-modal h3:contains("phone")',
+          'h3:contains("phone verification")',
+          'h3:contains("Phone verification")',
+          // Look for any modal with phone-related content
+          '[role="dialog"] h3:contains("phone")',
+          '[role="dialog"] h3:contains("verify")'
+        ], 20000); // 2x longer timeout (20 seconds instead of 10)
         
-        // Then check for "enter your code" modal (OTP input modal)
-        const otpModal = await this.waitForSelectorWithRetry([
-          'h3:contains("Enter your code")',
-          'h3:contains("enter your code")',
-          '.pincode-input',
-          'input[type="text"][maxlength="1"]', // OTP input fields
-          'button#checkPin',
-          '[data-ev-label="check_pin"]',
-          'button:contains("Verify phone number")',
-          '.air3-btn-primary:contains("Verify")'
-        ], 2000);
-        
-        if (sendVerificationModal) {
-          logger.info('✅ Found "send verification" modal - will click Send code button');
-          modalElement = sendVerificationModal;
-        } else if (otpModal) {
-          logger.info('⚠️ Found "enter your code" modal directly - skipping Send code step');
-          
-          // In skip-OTP mode, use default OTP, otherwise get from TextVerified
-          let otpCode: string | null = null;
-          
-          if (skipOtp) {
-            logger.info('Skip-OTP mode: Using manual OTP service for immediate OTP modal');
-            try {
-              const { ManualOtpService } = await import('../../services/manualOtpService.js');
-              const manualOtpService = new ManualOtpService();
-              
-              // Wait for manual OTP (5 minutes timeout, check every 5 seconds)
-              const manualOtp = await manualOtpService.waitForManualOtp(this.user.id, 5, 5);
-              
-              if (manualOtp) {
-                logger.info(`✅ Received manual OTP: ${manualOtp}`);
-                otpCode = manualOtp;
-              } else {
-                logger.warn('Manual OTP timeout, will use default OTP');
-                otpCode = '12345';
-              }
-            } catch (error) {
-              logger.warn(`Failed to get manual OTP: ${error instanceof Error ? error.message : 'Unknown error'}, using default OTP`);
-              otpCode = '12345';
-            }
-          } else {
-            try {
-              const textVerifiedService = new TextVerifiedService();
-              logger.info('Getting OTP from TextVerified for immediate OTP modal...');
-              
-              // Get OTP with 3 minute timeout
-              otpCode = await textVerifiedService.waitForOTP(this.user.id, 180);
-              
-              if (otpCode) {
-                logger.info(`✅ Received OTP from TextVerified: ${otpCode}`);
-              }
-              
-            } catch (error) {
-              logger.warn('Failed to get OTP from TextVerified for immediate modal');
-            }
-          }
-          
-          // Skip to OTP input handling directly
-          return await this.handleOTPInput(otpCode, skipOtp);
+        if (phoneVerificationModal) {
+          logger.info(`✅ Phone verification modal found on attempt ${attempt}`);
+        } else {
+          logger.info(`❌ Phone verification modal not found on attempt ${attempt}`);
         }
 
-        if (!modalElement && attempts < maxAttempts) {
-          logger.warn(`Phone verification modal not found on attempt ${attempts}, waiting and trying again...`);
+        // Also check for OTP input modal with multiple detection methods
+        const otpModal = await this.page.evaluate(() => {
+          // Method 1: Check for h3 elements with "Enter your code"
+          const h3Elements = document.querySelectorAll('h3');
+          const h3Match = Array.from(h3Elements).find(h3 => h3.textContent?.includes('Enter your code'));
+          if (h3Match) {
+            console.log('OTP modal found via h3 method');
+            return h3Match;
+          }
+          
+          // Method 2: Check for any element with "Enter your code" text
+          const allElements = document.querySelectorAll('*');
+          const textMatch = Array.from(allElements).find(el => el.textContent?.includes('Enter your code'));
+          if (textMatch) {
+            console.log('OTP modal found via text method');
+            return textMatch;
+          }
+          
+          // Method 3: Check for OTP input fields
+          const otpInputs = document.querySelectorAll('.pincode-input, input[type="text"][maxlength="1"]');
+          if (otpInputs.length > 0) {
+            console.log('OTP modal found via input fields method');
+            return otpInputs[0];
+          }
+          
+          // Method 4: Check for modal with verification content
+          const modalElements = document.querySelectorAll('[role="dialog"], .air3-modal, .modal');
+          const modalMatch = Array.from(modalElements).find(modal => 
+            modal.textContent?.includes('code') || 
+            modal.textContent?.includes('verification') ||
+            modal.textContent?.includes('OTP')
+          );
+          if (modalMatch) {
+            console.log('OTP modal found via modal content method');
+            return modalMatch;
+          }
+          
+          console.log('No OTP modal found with any method');
+          return null;
+        });
+
+        if (phoneVerificationModal) {
+          logger.info(`✅ Phone verification modal detected on attempt ${attempt}`);
+          modalFound = true;
+          phoneVerificationModalFound = true;
+          break;
+        } else if (otpModal) {
+          logger.info(`✅ OTP input modal detected on attempt ${attempt} (OTP was already sent)`);
+          // OTP modal is already present, skip phone verification modal
+          modalFound = true;
+          phoneVerificationModalFound = false;
+          break;
+        }
+        
+        if (attempt < maxRetries) {
+          logger.warn(`Neither phone verification modal nor OTP modal found on attempt ${attempt}, waiting before retry...`);
+          // Wait 3-5 seconds between attempts
           await this.randomDelay(3000, 5000);
           
-          // Try clicking the Next button again if modal didn't appear
-          const nextButton = await this.waitForSelectorWithRetry([
-            '[data-test="next-button"]',
-            'button:contains("Next")',
-            '.air3-btn-primary:contains("Next")'
-          ], 5000);
+          // Also wait for page to be ready
+          await this.waitForPageReady();
           
-          if (nextButton) {
-            logger.info('Clicking Next button again to trigger phone verification modal...');
-            await this.clickElement(nextButton);
-            await this.randomDelay(2000, 3000);
+          // Check if we're still on the location page
+          const currentUrl = this.page.url();
+          if (!currentUrl.includes('/nx/create-profile/location')) {
+            logger.warn(`Page URL changed during modal wait: ${currentUrl}`);
           }
         }
       }
 
-      if (!modalElement) {
-        logger.error('Phone verification modal not found after all attempts');
-        return this.createError('PHONE_VERIFICATION_MODAL_NOT_FOUND', 'Phone verification modal not found after multiple attempts');
+      // Check if any modal was found
+      if (!modalFound) {
+        logger.error(`Neither phone verification modal nor OTP input modal found after ${maxRetries} attempts`);
+        return this.createError('PHONE_VERIFICATION_MODAL_NOT_FOUND', `Neither phone verification modal nor OTP input modal found after ${maxRetries} attempts with extended delays`);
       }
 
-      logger.info('Phone verification modal detected');
+      // Handle phone verification modal if found
+      if (phoneVerificationModalFound) {
+        logger.info('Phone verification modal found, proceeding with Send code button...');
+        
+        // Look for the "Send code" button
+        const sendCodeButton = await this.waitForSelectorWithRetry([
+          'button#submitPhone',
+          '[data-ev-label="submit_phone"]',
+          'button:contains("Send code")',
+          '.air3-btn-primary:contains("Send code")'
+        ], 5000);
 
-      // Look for the "Send code" button
-      const sendCodeButton = await this.waitForSelectorWithRetry([
-        'button#submitPhone',
-        '[data-ev-label="submit_phone"]',
-        'button:contains("Send code")',
-        '.air3-btn-primary:contains("Send code")'
-      ], 5000);
-
-      if (!sendCodeButton) {
-        logger.warn('Send code button not found in phone verification modal');
-        return this.createError('SEND_CODE_BUTTON_NOT_FOUND', 'Could not find Send code button in phone verification modal');
-      }
-
-      // Get OTP before clicking send code button (in skip-OTP mode use default, otherwise check for existing)
-      let otpCode: string | null = null;
-      
-      if (skipOtp) {
-        logger.info('Skip-OTP mode: Using manual OTP service');
-        try {
-          const { ManualOtpService } = await import('../../services/manualOtpService.js');
-          const manualOtpService = new ManualOtpService();
-          
-          // Wait for manual OTP (5 minutes timeout, check every 5 seconds)
-          const manualOtp = await manualOtpService.waitForManualOtp(this.user.id, 5, 5);
-          
-          if (manualOtp) {
-            logger.info(`✅ Received manual OTP: ${manualOtp}`);
-            otpCode = manualOtp;
-          } else {
-            logger.warn('Manual OTP timeout, will use default OTP');
-            otpCode = '12345';
-          }
-        } catch (error) {
-          logger.warn(`Failed to get manual OTP: ${error instanceof Error ? error.message : 'Unknown error'}, using default OTP`);
-          otpCode = '12345';
+        if (!sendCodeButton) {
+          logger.warn('Send code button not found in phone verification modal');
+          return this.createError('SEND_CODE_BUTTON_NOT_FOUND', 'Could not find Send code button in phone verification modal');
         }
+
+        logger.info('Clicking Send code button...');
+        await this.clickElement(sendCodeButton);
+        
+        // Wait for the button to be processed
+        await this.randomDelay(2000, 3000);
+        
+        logger.info('Send code button clicked successfully');
+        
+        // Now wait for the OTP input modal to appear (10 seconds as requested)
+        logger.info('Waiting for OTP input modal to appear (10 seconds)...');
+        await this.randomDelay(10000, 10000);
       } else {
-        try {
-          const textVerifiedService = new TextVerifiedService();
-          logger.info('Checking for existing OTP from TextVerified before sending code...');
-          
-          // Try to get existing OTP with short timeout (don't wait long)
-          otpCode = await textVerifiedService.waitForOTP(this.user.id, 5);
-          
-          if (otpCode) {
-            logger.info(`✅ Found existing OTP from TextVerified: ${otpCode}`);
-          } else {
-            logger.info('No existing OTP found, will request new one after clicking Send code');
-          }
-          
-        } catch (error) {
-          logger.warn('Failed to check for existing OTP, will request new one after clicking Send code');
-        }
+        logger.info('OTP input modal already present, proceeding directly to OTP handling...');
       }
-
-      logger.info('Clicking Send code button...');
-      await this.clickElement(sendCodeButton);
       
-      // Wait for the button to be processed
-      await this.randomDelay(2000, 3000);
-      
-      logger.info('Send code button clicked successfully');
-      
-      // Now wait for the OTP input modal to appear (10 seconds as requested)
-      logger.info('Waiting for OTP input modal to appear (10 seconds)...');
-      await this.randomDelay(10000, 10000);
-      
-      // Handle OTP input, passing the pre-fetched OTP if available
-      return await this.handleOTPInput(otpCode, skipOtp);
+      // Handle OTP input with resumability
+      return await this.handleOTPInputWithResumability(skipOtp);
 
     } catch (error) {
       return this.createError('PHONE_VERIFICATION_MODAL_FAILED', `Phone verification modal handling failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
-  private async handleOTPInput(preFetchedOtp?: string | null, skipOtp: boolean = false): Promise<AutomationResult> {
+  private async handleOTPInputWithResumability(skipOtp: boolean = false): Promise<AutomationResult> {
     try {
-      // Check for the OTP input modal
+      // Check for the OTP input modal with multiple detection methods
       const otpModalTitle = await this.page.evaluate(() => {
+        // Method 1: Check for h3 elements with "Enter your code"
         const h3Elements = document.querySelectorAll('h3');
-        return Array.from(h3Elements).find(h3 => h3.textContent?.includes('Enter your code'));
+        const h3Match = Array.from(h3Elements).find(h3 => h3.textContent?.includes('Enter your code'));
+        if (h3Match) return h3Match;
+        
+        // Method 2: Check for any element with "Enter your code" text
+        const allElements = document.querySelectorAll('*');
+        const textMatch = Array.from(allElements).find(el => el.textContent?.includes('Enter your code'));
+        if (textMatch) return textMatch;
+        
+        // Method 3: Check for OTP input fields
+        const otpInputs = document.querySelectorAll('.pincode-input, input[type="text"][maxlength="1"]');
+        if (otpInputs.length > 0) return otpInputs[0];
+        
+        // Method 4: Check for modal with verification content
+        const modalElements = document.querySelectorAll('[role="dialog"], .air3-modal, .modal');
+        const modalMatch = Array.from(modalElements).find(modal => 
+          modal.textContent?.includes('code') || 
+          modal.textContent?.includes('verification') ||
+          modal.textContent?.includes('OTP')
+        );
+        if (modalMatch) return modalMatch;
+        
+        return null;
       });
       
       if (!otpModalTitle) {
-        logger.warn('OTP input modal not found');
-        return this.createError('OTP_MODAL_NOT_FOUND', 'OTP input modal not found');
+        logger.warn('OTP input modal not found, trying alternative detection...');
+        
+        // Try alternative detection methods
+        const alternativeDetection = await this.page.evaluate(() => {
+          // Check for any visible modal or dialog
+          const visibleModals = Array.from(document.querySelectorAll('[role="dialog"], .air3-modal, .modal, .popup'))
+            .filter(modal => {
+              const style = window.getComputedStyle(modal);
+              return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+            });
+          
+          if (visibleModals.length > 0) {
+            logger.info(`Found ${visibleModals.length} visible modal(s)`);
+            return visibleModals[0];
+          }
+          
+          // Check for any input fields that might be OTP inputs
+          const inputFields = document.querySelectorAll('input[type="text"], input[type="number"]');
+          if (inputFields.length > 0) {
+            logger.info(`Found ${inputFields.length} input field(s)`);
+            return inputFields[0];
+          }
+          
+          return null;
+        });
+        
+        if (!alternativeDetection) {
+          logger.error('OTP input modal not found with any detection method');
+          return this.createError('OTP_MODAL_NOT_FOUND', 'OTP input modal not found with any detection method');
+        } else {
+          logger.info('OTP input modal found with alternative detection method');
+        }
       }
       
-      logger.info('OTP input modal detected, handling OTP input...');
+      logger.info('OTP input modal detected, waiting for modal to fully load...');
       
-      // Wait a bit more for the OTP modal to be fully loaded
-      await this.randomDelay(2000, 3000);
+      // Wait for the OTP modal to be fully loaded and ready
+      await this.randomDelay(3000, 5000);
       
       // Find the first OTP input field
       const firstOtpInput = await this.page.$('.pincode-input');
@@ -1193,57 +1571,15 @@ export class LocationStepHandler extends StepHandler {
         return this.createError('OTP_FIELDS_NOT_FOUND', 'OTP input field not found');
       }
       
-      logger.info('Found OTP input field');
+      logger.info('Found OTP input field, now checking for OTP...');
       
-      // Get OTP - use default 12345 in skip-OTP mode, otherwise get from TextVerified
-      let otpCode: string;
-      if (preFetchedOtp) {
-        logger.info(`Using pre-fetched OTP: ${preFetchedOtp}`);
-        otpCode = preFetchedOtp;
-      } else if (skipOtp) {
-        logger.info('Skip-OTP mode: Using manual OTP service for OTP input');
-        try {
-          const { ManualOtpService } = await import('../../services/manualOtpService.js');
-          const manualOtpService = new ManualOtpService();
-          
-          // Wait for manual OTP (5 minutes timeout, check every 5 seconds)
-          const manualOtp = await manualOtpService.waitForManualOtp(this.user.id, 5, 5);
-          
-          if (manualOtp) {
-            logger.info(`✅ Received manual OTP: ${manualOtp}`);
-            otpCode = manualOtp;
-          } else {
-            logger.warn('Manual OTP timeout, will use default OTP');
-            otpCode = '12345';
-          }
-        } catch (error) {
-          logger.warn(`Failed to get manual OTP: ${error instanceof Error ? error.message : 'Unknown error'}, using default OTP`);
-          otpCode = '12345';
-        }
-      } else {
-        logger.info('Getting new OTP from TextVerified...');
-        try {
-          const textVerifiedService = new TextVerifiedService();
-          logger.info('Waiting for OTP from TextVerified service...');
-          
-          // Wait for OTP with 3 minute timeout
-          const receivedOtp = await textVerifiedService.waitForOTP(this.user.id, 180);
-          
-          if (!receivedOtp) {
-            logger.error('No OTP received from TextVerified within 180 seconds');
-            return this.createError('OTP_NOT_RECEIVED', 'No OTP received from TextVerified within 180 seconds');
-          }
-          
-          otpCode = receivedOtp;
-          logger.info(`✅ Received OTP from TextVerified: ${otpCode}`);
-          
-        } catch (error) {
-          logger.error('Failed to get OTP from TextVerified:', error);
-          
-          // Fallback to test code if TextVerified fails
-          logger.warn('Falling back to test OTP code 12345 due to TextVerified error');
-          otpCode = '12345';
-        }
+      // Now that the modal is open, check for OTP
+      let otpCode = await this.checkForOTPAfterModalOpen(skipOtp);
+      
+      // Ensure we have an OTP code
+      if (!otpCode) {
+        logger.error('No OTP code available, cannot proceed with phone verification');
+        return this.createError('OTP_NOT_AVAILABLE', 'No OTP code available for phone verification');
       }
       
       // Focus the first field and type the received OTP
@@ -1351,6 +1687,8 @@ export class LocationStepHandler extends StepHandler {
     }
   }
 
+
+
   private async verifyAllFieldsBeforeNext(): Promise<AutomationResult> {
     try {
       logger.info('Verifying all fields before clicking Next button...');
@@ -1360,7 +1698,7 @@ export class LocationStepHandler extends StepHandler {
         city: this.user.location_city || 'San Francisco',
         state: this.user.location_state || 'California',
         zipCode: this.user.location_post_code || '94102',
-        phoneNumber: this.user.phone || '2314992031'
+        phoneNumber: this.user.phone || '' // Will be generated by OTP Provider if not available
       };
       
       let allFieldsValid = true;
@@ -1433,11 +1771,23 @@ export class LocationStepHandler extends StepHandler {
         if (!phoneValue || phoneValue.trim() === '') {
           errors.push('Phone number is empty');
           allFieldsValid = false;
-        } else if (phoneValue !== expectedData.phoneNumber) {
-          errors.push(`Phone number verification failed - Expected: ${expectedData.phoneNumber}, got: ${phoneValue}`);
-          allFieldsValid = false;
         } else {
-          logger.info(`✅ Phone number verified: ${phoneValue}`);
+          // If expectedData.phoneNumber is empty, it means we need to generate one
+          if (!expectedData.phoneNumber || expectedData.phoneNumber.trim() === '') {
+            logger.info(`Phone number field has value: ${phoneValue}, but no expected value set (will be generated)`);
+            logger.info(`✅ Phone number field verified: ${phoneValue}`);
+          } else {
+            // Compare only digits, ignoring spaces and formatting
+            const cleanExpected = expectedData.phoneNumber.replace(/\D/g, '');
+            const cleanActual = phoneValue.replace(/\D/g, '');
+            
+            if (cleanActual !== cleanExpected) {
+              errors.push(`Phone number verification failed - Expected: ${expectedData.phoneNumber} (${cleanExpected}), got: ${phoneValue} (${cleanActual})`);
+              allFieldsValid = false;
+            } else {
+              logger.info(`✅ Phone number verified: ${phoneValue} (digits: ${cleanActual})`);
+            }
+          }
         }
       }
 

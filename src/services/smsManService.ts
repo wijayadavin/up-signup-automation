@@ -2,7 +2,7 @@ import { getLogger } from '../utils/logger.js';
 
 const logger = getLogger(import.meta.url);
 
-interface SmsPoolOrder {
+interface SmsManOrder {
   orderid?: string;
   order_code?: string;
   phonenumber: string;
@@ -22,23 +22,23 @@ interface SmsPoolOrder {
   number?: string;
 }
 
-interface SmsPoolResponse {
+interface SmsManResponse {
   success: number;
   message?: string;
   data?: any;
 }
 
-export class SmsPoolService {
-  private baseUrl = 'https://api.smspool.net';
+export class SmsManService {
+  private baseUrl = 'https://api.sms-man.com';
   private apiKey: string;
 
   constructor() {
-    this.apiKey = process.env.SMSPOOL_API_KEY || '';
+    this.apiKey = process.env.SMSMAN_API_KEY || '';
     
-    logger.info(`SMSPool API Key: ${this.apiKey ? 'SET' : 'NOT SET'}`);
+    logger.info(`SMS-Man API Key: ${this.apiKey ? 'SET' : 'NOT SET'}`);
     
     if (!this.apiKey) {
-      throw new Error('SMSPOOL_API_KEY environment variable is required');
+      throw new Error('SMSMAN_API_KEY environment variable is required');
     }
   }
 
@@ -62,10 +62,10 @@ export class SmsPoolService {
       const data = await response.json();
       const balance = parseFloat(data.balance || '0');
       
-      logger.info(`SMSPool balance: ${balance}`);
+      logger.info(`SMS-Man balance: ${balance}`);
       return balance;
     } catch (error) {
-      logger.error('Error getting SMSPool balance:', error);
+      logger.error('Error getting SMS-Man balance:', error);
       throw error;
     }
   }
@@ -119,8 +119,8 @@ export class SmsPoolService {
    */
   async findUpworkService(): Promise<string | null> {
     try {
-      // Use the known Upwork service ID
-      const upworkServiceId = '962';
+      // Use the known Upwork service ID for SMS-Man
+      const upworkServiceId = 'upwork'; // This may need to be adjusted based on actual SMS-Man service IDs
       logger.info(`Using Upwork service ID: ${upworkServiceId}`);
       return upworkServiceId;
     } catch (error) {
@@ -134,12 +134,19 @@ export class SmsPoolService {
    */
   async findCountryId(countryCode: string): Promise<string | null> {
     try {
-      // Use known country IDs
+      // Use known country IDs for SMS-Man
       const countryIdMap: { [key: string]: string } = {
         'US': '1',
-        'GB': '2', 
-        'UA': '25',
-        'ID': '2' // Indonesia also uses ID 2
+        'CA': '2',
+        'AU': '3',
+        'DE': '4',
+        'FR': '5',
+        'IT': '6',
+        'ES': '7',
+        'NL': '8',
+        'BE': '9',
+        'AT': '10',
+        'CH': '11'
       };
       
       const countryId = countryIdMap[countryCode.toUpperCase()];
@@ -192,7 +199,7 @@ export class SmsPoolService {
       const data = await response.json();
       
       // Log the raw response for debugging
-      logger.info(`SMSPool order response: ${JSON.stringify(data)}`);
+      logger.info(`SMS-Man order response: ${JSON.stringify(data)}`);
       
       if (data.success !== 1) {
         throw new Error(`SMS order failed: ${data.message || 'Unknown error'}`);
@@ -216,7 +223,7 @@ export class SmsPoolService {
   /**
    * Check SMS status and get OTP
    */
-  async checkSms(orderId: string): Promise<SmsPoolOrder | null> {
+  async checkSms(orderId: string): Promise<SmsManOrder | null> {
     try {
       const formData = new FormData();
       formData.append('key', this.apiKey);
@@ -234,7 +241,7 @@ export class SmsPoolService {
       const data = await response.json();
       
       // Log the raw response for debugging
-      logger.info(`SMSPool API response: ${JSON.stringify(data)}`);
+      logger.info(`SMS-Man API response: ${JSON.stringify(data)}`);
       
       // Check if the response indicates success (status: 1 or 3 means success)
       // status: 1 = pending, status: 3 = SMS received with OTP
@@ -258,7 +265,7 @@ export class SmsPoolService {
         }
       }
 
-      const order: SmsPoolOrder = {
+      const order: SmsManOrder = {
         orderid: data.orderid || orderId,
         phonenumber: data.phonenumber || '',
         code: otpCode || data.code || '',
@@ -285,12 +292,12 @@ export class SmsPoolService {
     const timeoutMs = timeoutSeconds * 1000;
     const startTime = Date.now();
 
-    logger.info(`Starting SMSPool OTP wait for user ${userId} in country ${countryCode} (timeout: ${timeoutSeconds}s)`);
+    logger.info(`Starting SMS-Man OTP wait for user ${userId} in country ${countryCode} (timeout: ${timeoutSeconds}s)`);
 
     try {
       // Check if user already has phone number and provider set
       const existingData = await this.getUserPhoneAndProvider(userId);
-      if (existingData && existingData.phone && existingData.otp_provider === 'SMS_POOL') {
+      if (existingData && existingData.phone && existingData.otp_provider === 'SMS_MAN') {
         logger.info(`User ${userId} already has phone ${existingData.phone} and provider ${existingData.otp_provider}, checking for existing OTP...`);
         
         // Try to get OTP from existing active orders
@@ -332,7 +339,7 @@ export class SmsPoolService {
           // Wait for any of these orders to receive an OTP
           while (true) {
             for (const order of matchingOrders) {
-              const orderId = this.getOrderId(order);
+              const orderId = order.order_code || order.orderid || '';
               const orderDetails = await this.checkSms(orderId);
               if (orderDetails && orderDetails.code) {
                 logger.info(`✅ Received OTP ${orderDetails.code} from existing order ${orderId}`);
@@ -346,7 +353,7 @@ export class SmsPoolService {
             
             // Check timeout
             if (Date.now() - startTime >= timeoutMs) {
-              logger.warn(`SMSPool OTP wait timed out after ${timeoutSeconds} seconds for existing phone ${existingData.phone}`);
+              logger.warn(`SMS-Man OTP wait timed out after ${timeoutSeconds} seconds for existing phone ${existingData.phone}`);
               return null;
             }
             
@@ -366,7 +373,7 @@ export class SmsPoolService {
       // Get account balance first
       const balance = await this.getBalance();
       if (balance <= 0) {
-        throw new Error('Insufficient SMSPool balance');
+        throw new Error('Insufficient SMS-Man balance');
       }
 
       // Order SMS
@@ -376,7 +383,7 @@ export class SmsPoolService {
       
       // If we got the phone number from the order, save it immediately
       if (orderResult.phoneNumber) {
-        await this.saveUserPhoneAndProvider(userId, orderResult.phoneNumber, 'SMS_POOL');
+        await this.saveUserPhoneAndProvider(userId, orderResult.phoneNumber, 'SMS_MAN');
       }
 
       // Poll for SMS
@@ -384,12 +391,12 @@ export class SmsPoolService {
         const order = await this.checkSms(orderId);
         
         if (order && order.code && order.status === 'completed') {
-          logger.info(`✅ OTP received from SMSPool: ${order.code}`);
+          logger.info(`✅ OTP received from SMS-Man: ${order.code}`);
           logger.info(`Phone number: ${order.phonenumber}`);
           logger.info(`Completed on: ${order.completed_on}`);
           
           // Save phone number and OTP provider to user record
-          await this.saveUserPhoneAndProvider(userId, order.phonenumber, 'SMS_POOL');
+          await this.saveUserPhoneAndProvider(userId, order.phonenumber, 'SMS_MAN');
           
           // Save OTP code to user record
           await this.saveUserOTP(userId, order.code);
@@ -397,11 +404,11 @@ export class SmsPoolService {
           return order.code;
         } else if (order && order.code) {
           // If we have a code but status is not 'completed', still return it
-          logger.info(`✅ OTP received from SMSPool (status: ${order.status}): ${order.code}`);
+          logger.info(`✅ OTP received from SMS-Man (status: ${order.status}): ${order.code}`);
           logger.info(`Phone number: ${order.phonenumber}`);
           
           // Save phone number and OTP provider to user record
-          await this.saveUserPhoneAndProvider(userId, order.phonenumber, 'SMS_POOL');
+          await this.saveUserPhoneAndProvider(userId, order.phonenumber, 'SMS_MAN');
           
           // Save OTP code to user record
           await this.saveUserOTP(userId, order.code);
@@ -411,16 +418,85 @@ export class SmsPoolService {
 
         // Check timeout
         if (Date.now() - startTime >= timeoutMs) {
-          logger.warn(`SMSPool OTP wait timed out after ${timeoutSeconds} seconds`);
+          logger.warn(`SMS-Man OTP wait timed out after ${timeoutSeconds} seconds`);
           return null;
         }
 
         // Wait before next poll
         await new Promise(resolve => setTimeout(resolve, interval));
-        logger.debug(`Polling SMSPool... (${Math.round((Date.now() - startTime) / 1000)}s elapsed)`);
+        logger.debug(`Polling SMS-Man... (${Math.round((Date.now() - startTime) / 1000)}s elapsed)`);
       }
     } catch (error) {
-      logger.error('Error waiting for SMSPool OTP:', error);
+      logger.error('Error waiting for SMS-Man OTP:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Cancel SMS order
+   */
+  async cancelSms(orderId: string): Promise<boolean> {
+    try {
+      const formData = new FormData();
+      formData.append('key', this.apiKey);
+      formData.append('orderid', orderId);
+
+      const response = await fetch(`${this.baseUrl}/sms/cancel`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error, status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const success = data.success === 1;
+      
+      if (success) {
+        logger.info(`SMS order ${orderId} cancelled successfully`);
+      } else {
+        logger.warn(`Failed to cancel SMS order ${orderId}: ${data.message || 'Unknown error'}`);
+      }
+
+      return success;
+    } catch (error) {
+      logger.error('Error cancelling SMS:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get active orders
+   */
+  async getActiveOrders(): Promise<SmsManOrder[]> {
+    try {
+      const formData = new FormData();
+      formData.append('key', this.apiKey);
+
+      const response = await fetch(`${this.baseUrl}/request/active`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error, status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const orders = data || [];
+      
+      logger.info(`Found ${orders.length} active orders`);
+      
+      // Log the raw data structure for debugging
+      if (orders.length > 0) {
+        logger.info(`Raw order data structure:`, JSON.stringify(orders[0], null, 2));
+        logger.info(`Available fields:`, Object.keys(orders[0]));
+      }
+      
+      return orders;
+    } catch (error) {
+      logger.error('Error getting active orders:', error);
       throw error;
     }
   }
@@ -485,13 +561,6 @@ export class SmsPoolService {
   }
 
   /**
-   * Get the correct order ID from an order object
-   */
-  private getOrderId(order: SmsPoolOrder): string {
-    return order.order_code || order.orderid || '';
-  }
-
-  /**
    * Check existing active orders for OTP
    */
   private async checkExistingOrdersForOtp(phoneNumber: string, userId?: number, countryCode?: string): Promise<string | null> {
@@ -531,7 +600,7 @@ export class SmsPoolService {
       
       // Check each order for OTP
       for (const order of matchingOrders) {
-        const orderId = this.getOrderId(order);
+        const orderId = order.order_code || order.orderid || '';
         logger.info(`Checking order ${orderId} for OTP...`);
         const orderDetails = await this.checkSms(orderId);
         
@@ -597,112 +666,6 @@ export class SmsPoolService {
       logger.info(`Saved OTP ${otpCode} to user ${userId}`);
     } catch (error) {
       logger.error('Failed to save OTP to user:', error);
-    }
-  }
-
-  /**
-   * Cancel SMS order
-   */
-  async cancelSms(orderId: string): Promise<boolean> {
-    try {
-      const formData = new FormData();
-      formData.append('key', this.apiKey);
-      formData.append('orderid', orderId);
-
-      const response = await fetch(`${this.baseUrl}/sms/cancel`, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error, status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const success = data.success === 1;
-      
-      if (success) {
-        logger.info(`SMS order ${orderId} cancelled successfully`);
-      } else {
-        logger.warn(`Failed to cancel SMS order ${orderId}: ${data.message || 'Unknown error'}`);
-      }
-
-      return success;
-    } catch (error) {
-      logger.error('Error cancelling SMS:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Get history orders
-   */
-  async getHistoryOrders(): Promise<SmsPoolOrder[]> {
-    try {
-      const formData = new FormData();
-      formData.append('key', this.apiKey);
-      formData.append('start', '0');
-      formData.append('length', '1000');
-
-      const response = await fetch(`${this.baseUrl}/request/history`, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error, status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const orders = data || [];
-      
-      logger.info(`Found ${orders.length} history orders`);
-      
-      // Log the raw data structure for debugging
-      if (orders.length > 0) {
-        logger.info(`Raw history order data structure:`, JSON.stringify(orders[0], null, 2));
-        logger.info(`Available history fields:`, Object.keys(orders[0]));
-      }
-      
-      return orders;
-    } catch (error) {
-      logger.error('Error getting history orders:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Get active orders
-   */
-  async getActiveOrders(): Promise<SmsPoolOrder[]> {
-    try {
-      const formData = new FormData();
-      formData.append('key', this.apiKey);
-
-      const response = await fetch(`${this.baseUrl}/request/active`, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error, status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const orders = data || [];
-      
-      logger.info(`Found ${orders.length} active orders`);
-      
-      // Log the raw data structure for debugging
-      if (orders.length > 0) {
-        logger.info(`Raw order data structure:`, JSON.stringify(orders[0], null, 2));
-        logger.info(`Available fields:`, Object.keys(orders[0]));
-      }
-      
-      return orders;
-    } catch (error) {
-      logger.error('Error getting active orders:', error);
-      throw error;
     }
   }
 }

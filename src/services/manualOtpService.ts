@@ -29,12 +29,12 @@ export class ManualOtpService {
         // Check for manual OTP in database
         const user = await this.db
           .selectFrom('users')
-          .select(['manual_otp'])
+          .select(['otp'])
           .where('id', '=', userId)
           .executeTakeFirst();
         
-        if (user && user.manual_otp !== null) {
-          const otpCode = user.manual_otp.toString();
+        if (user && user.otp !== null) {
+          const otpCode = user.otp.toString();
           logger.info(`✅ Manual OTP found for user ${userId}: ${otpCode}`);
           
           // Clear the OTP after retrieving it
@@ -65,7 +65,7 @@ export class ManualOtpService {
     try {
       await this.db
         .updateTable('users')
-        .set({ manual_otp: otpCode })
+        .set({ otp: otpCode })
         .where('id', '=', userId)
         .execute();
       
@@ -84,7 +84,7 @@ export class ManualOtpService {
     try {
       await this.db
         .updateTable('users')
-        .set({ manual_otp: null })
+        .set({ otp: null })
         .where('id', '=', userId)
         .execute();
       
@@ -104,11 +104,11 @@ export class ManualOtpService {
     try {
       const user = await this.db
         .selectFrom('users')
-        .select(['manual_otp'])
+        .select(['otp'])
         .where('id', '=', userId)
         .executeTakeFirst();
       
-      return user?.manual_otp || null;
+      return user?.otp || null;
     } catch (error) {
       logger.error(`Failed to get manual OTP for user ${userId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return null;

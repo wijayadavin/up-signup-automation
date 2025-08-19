@@ -9,6 +9,7 @@ import { LanguagesStepHandler } from './steps/LanguagesStepHandler';
 import { RateStepHandler } from './steps/RateStepHandler';
 import { OverviewStepHandler } from './steps/OverviewStepHandler';
 import { LocationStepHandler } from './steps/LocationStepHandler';
+import { SubmitStepHandler } from './steps/SubmitStepHandler';
 import { ExperienceStepHandler } from './steps/ExperienceStepHandler';
 import { WelcomeStepHandler } from './steps/WelcomeStepHandler';
 import { GoalStepHandler } from './steps/GoalStepHandler';
@@ -17,10 +18,11 @@ import { ResumeImportStepHandler } from './steps/ResumeImportStepHandler';
 import { CategoriesStepHandler } from './steps/CategoriesStepHandler';
 import { TitleStepHandler } from './steps/TitleStepHandler';
 import { EmploymentStepHandler } from './steps/EmploymentStepHandler';
+import { GeneralStepHandler } from './steps/GeneralStepHandler';
 import { StepHandler } from './StepHandler.js';
 import { SessionService } from '../services/sessionService.js';
 import { BrowserManager } from '../browser/browserManager.js';
-import { TextVerifiedService } from '../services/textVerifiedService.js';
+// import { TextVerifiedService } from '../services/textVerifiedService.js';
 
 // Create a simple logger for automation
 const logger = {
@@ -68,6 +70,8 @@ export class LoginAutomation extends BaseAutomation {
       ['overview', new OverviewStepHandler(page, user)],
       ['rate', new RateStepHandler(page, user)],
       ['location', new LocationStepHandler(page, user)],
+      ['general', new GeneralStepHandler(page, user)],
+      ['submit', new SubmitStepHandler(page, user)],
       // Add more step handlers as they are created
     ]);
     
@@ -338,6 +342,69 @@ export class LoginAutomation extends BaseAutomation {
     // Wait for the page to be ready and network to be idle
     await this.waitForPageReady();
     
+    // Check if we're in the correct password state by looking for the "Welcome" message with email
+    logger.info('Checking for password state (Welcome message with email)...');
+    
+    // Function to check password state
+    const checkPasswordState = async (userEmail: string) => {
+      return await this.page.evaluate((email) => {
+        // Look for the Welcome message
+        const welcomeElement = document.querySelector('h1.text-center.h3.mb-md-6x.d-none.d-md-block');
+        if (!welcomeElement) {
+          return false;
+        }
+        
+        // Check if it contains "Welcome"
+        const welcomeText = welcomeElement.textContent?.trim();
+        if (!welcomeText || !welcomeText.includes('Welcome')) {
+          return false;
+        }
+        
+        // Look for the email display
+        const emailElement = document.querySelector('div.small.mt-2x.mb-3x.pb-2x.ellipsis.font-weight-body');
+        if (!emailElement) {
+          return false;
+        }
+        
+        // Check if the displayed email matches the user's email
+        const displayedEmail = emailElement.textContent?.trim();
+        return displayedEmail === email;
+      }, userEmail);
+    };
+    
+    // Try up to 3 times to find the password state
+    let isPasswordState = false;
+    const maxRetries = 3;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      logger.info(`Password state check attempt ${attempt}/${maxRetries}...`);
+      
+      isPasswordState = await checkPasswordState(this.user.email);
+      
+      if (isPasswordState) {
+        logger.info(`✅ Password state found on attempt ${attempt}`);
+        break;
+      }
+      
+      if (attempt < maxRetries) {
+        logger.warn(`Password state not found on attempt ${attempt}, waiting before retry...`);
+        // Wait progressively longer between attempts (3x more delay)
+        const waitTime = attempt * 6000; // 6s, 12s, 18s (was 2s, 4s, 6s)
+        await this.randomDelay(waitTime, waitTime + 3000);
+        await this.waitForPageReady();
+      }
+    }
+    
+    if (!isPasswordState) {
+      return this.createError(
+        'PASSWORD_STATE_NOT_FOUND',
+        `Password state not detected after ${maxRetries} attempts - Welcome message with email not found after email submission`
+      );
+    }
+    
+    logger.info('✅ Password state confirmed - Welcome message with email found');
+    
+    // Now look for password field
     logger.info('Looking for password field...');
     
     // Use the specialized password method for better reliability
@@ -540,7 +607,7 @@ export class LoginAutomation extends BaseAutomation {
         return this.createSuccess('done');
       }
 
-      const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'general'];
+      const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'submit', 'general'];
       let currentStepIndex = this.getStepIndex(currentStep);
       
       // Execute remaining steps in order
@@ -574,8 +641,25 @@ export class LoginAutomation extends BaseAutomation {
           return stepResult;
         }
         
-        // Verify URL changed after step completion (except for final location step)
-        if (stepName !== 'location') {
+        // Special handling for location step completion
+        if (stepName === 'location') {
+          logger.info('Location step completed successfully, verifying we are on location page...');
+          
+          // Verify we're actually on the location page
+          const currentUrl = this.page.url();
+          if (currentUrl.includes('/nx/create-profile/location')) {
+            logger.info('✅ Successfully reached location page, waiting 10 seconds...');
+            await this.randomDelay(10000, 10000); // Wait exactly 10 seconds
+            logger.info('✅ Automation completed successfully - reached location page and waited 10 seconds');
+            return this.createSuccess('done');
+          } else {
+            logger.warn(`Expected to be on location page, but current URL is: ${currentUrl}`);
+            return this.createError('LOCATION_PAGE_NOT_REACHED', `Expected location page but got: ${currentUrl}`);
+          }
+        }
+        
+        // Verify URL changed after step completion (except for submit step)
+        if (stepName !== 'submit') {
           await this.randomDelay(2000, 3000); // Wait for potential navigation
           const currentUrl = this.page.url();
           const currentStep = this.detectProfileStep(currentUrl);
@@ -626,7 +710,7 @@ export class LoginAutomation extends BaseAutomation {
             
             if (currentUrl.includes('/nx/create-profile/submit')) {
               logger.info('✅ Successfully redirected to submit page');
-      return this.createSuccess('done');
+              return this.createSuccess('done');
             } else if (currentUrl.includes('/nx/create-profile/location')) {
               logger.error('❌ Redirect failed: still on location page, profile creation may be incomplete');
               return this.createError('SUBMIT_REDIRECT_FAILED', `Redirect to submit page failed - still on location page: ${currentUrl}`);
@@ -646,22 +730,13 @@ export class LoginAutomation extends BaseAutomation {
           }
         }
         
-        // Check if we've successfully completed the location step (final step for success)
-        if (stepName === 'location') {
-          logger.info('Location step completed successfully, verifying we are on location page...');
-          
-          // Verify we're actually on the location page
-          const currentUrl = this.page.url();
-          if (currentUrl.includes('/nx/create-profile/location')) {
-            logger.info('✅ Successfully reached location page, waiting 10 seconds...');
-            await this.randomDelay(10000, 10000); // Wait exactly 10 seconds
-            logger.info('✅ Automation completed successfully - reached location page and waited 10 seconds');
-            return this.createSuccess('done');
-          } else {
-            logger.warn(`Expected to be on location page, but current URL is: ${currentUrl}`);
-            return this.createError('LOCATION_PAGE_NOT_REACHED', `Expected location page but got: ${currentUrl}`);
-          }
+        // Special case: if we just completed the submit step, we're done
+        if (stepName === 'submit') {
+          logger.info('✅ Submit step completed, profile creation finished');
+          return this.createSuccess('done');
         }
+        
+
 
       }
       
@@ -698,7 +773,7 @@ export class LoginAutomation extends BaseAutomation {
   }
 
   private getStepIndex(stepName: string): number {
-          const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'general'];
+          const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'submit', 'general'];
     const index = steps.indexOf(stepName);
     return index === -1 ? 0 : index;
   }
@@ -1650,29 +1725,48 @@ export class LoginAutomation extends BaseAutomation {
       
       logger.info(`Found ${otpInputs.length} OTP input fields`);
       
-      // Get real OTP from TextVerified service
+      // Get real OTP from SMSPool service (primary) or SMS-Man (backup)
       let otpCode: string;
       try {
-        const textVerifiedService = new TextVerifiedService();
-        logger.info('Waiting for OTP from TextVerified service...');
+        // Try SMSPool first
+        const { SmsPoolService } = await import('../services/smspoolService.js');
+        const smsPoolService = new SmsPoolService();
+        logger.info('Waiting for OTP from SMSPool service...');
         
         // Wait for OTP with 3 minute timeout
-        const receivedOtp = await textVerifiedService.waitForOTP(this.user.id, 180);
+        const receivedOtp = await smsPoolService.waitForOTP(this.user.id, this.user.country_code, 360);
         
         if (!receivedOtp) {
-          logger.error('No OTP received from TextVerified within 180 seconds');
-          return this.createError('OTP_NOT_RECEIVED', 'No OTP received from TextVerified within 180 seconds');
+          logger.error('No OTP received from SMSPool within 180 seconds');
+          return this.createError('OTP_NOT_RECEIVED', 'No OTP received from SMSPool within 180 seconds');
         }
         
         otpCode = receivedOtp;
-        logger.info(`✅ Received OTP from TextVerified: ${otpCode}`);
+        logger.info(`✅ Received OTP from SMSPool: ${otpCode}`);
         
       } catch (error) {
-        logger.error('Failed to get OTP from TextVerified:', error);
+        logger.error('Failed to get OTP from SMSPool:', error);
         
-        // Fallback to test code if TextVerified fails
-        logger.warn('Falling back to test OTP code 12345 due to TextVerified error');
-        otpCode = '12345';
+        // Try SMS-Man as fallback
+        logger.warn('SMSPool failed, trying SMS-Man as fallback...');
+        try {
+          const { SmsManService } = await import('../services/smsManService.js');
+          const smsManService = new SmsManService();
+          const receivedOtp = await smsManService.waitForOTP(this.user.id, this.user.country_code, 360);
+          
+          if (receivedOtp) {
+            otpCode = receivedOtp;
+            logger.info(`✅ Received OTP from SMS-Man: ${otpCode}`);
+          } else {
+            logger.error('No OTP received from SMS-Man within 180 seconds');
+            return this.createError('OTP_NOT_RECEIVED', 'No OTP received from SMS-Man within 180 seconds');
+          }
+        } catch (smsManError) {
+          logger.error('SMS-Man also failed:', smsManError);
+          // Fallback to test code if both providers fail
+          logger.warn('Falling back to test OTP code 12345 due to provider errors');
+          otpCode = '12345';
+        }
       }
       
       // Fill each OTP field with the received OTP code

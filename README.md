@@ -6,7 +6,7 @@ A robust puppeteer-based sign-up automation tool for Upwork with PostgreSQL data
 
 - **Robust Browser Automation**: Uses puppeteer-extra with stealth plugins to avoid detection
 - **PostgreSQL Database**: Stores user data and automation progress with comprehensive tracking
-- **Complete Profile Creation Workflow**: Full 15-step Upwork profile creation process:
+- **Complete Profile Creation Workflow**: Full 16-step Upwork profile creation process:
   - **Pre-Onboarding Steps**: Welcome, experience selection, work goals, preferences
   - **Core Profile Steps**: Resume import, categories, skills, title, employment, education
   - **Final Steps**: Languages, overview, rate, location with phone verification
@@ -124,6 +124,7 @@ The application provides several commands for different operations:
   - `--keep-open`: Keep browser open indefinitely
 - **`add-user`**: Add individual users to the database
 - **`process-users`**: Run complete login automation for pending users
+  - `--user-id <id>`: Process only a specific user by ID (overrides limit)
   - `--upload`: Enable upload mode for resume import step (handles file upload instead of manual form filling)
   - `--no-stealth`: Disable stealth mode for debugging (use normal browser behavior)
   - `--restore-session`: Restore existing session instead of starting from login
@@ -149,6 +150,7 @@ npm start <command> -- <flags>
 # Examples:
 npm start visit-login -- --debug --headless
 npm start process-users -- --limit 5 --headless
+npm start process-users -- --user-id 19 --restore-session
 npm start process-users -- --upload --no-stealth
 npm start process-users -- --restore-session --no-stealth
 npm start process-users -- --skip-otp
@@ -167,6 +169,7 @@ npm start visit-login --keep-open  # ❌ Wrong (missing --)
 node dist/main.js visit-login --debug --headless
 node dist/main.js visit-login --keep-open
 node dist/main.js process-users --limit 5 --headless
+node dist/main.js process-users --user-id 19 --restore-session
 node dist/main.js process-users --upload --no-stealth
 node dist/main.js process-users --restore-session --no-stealth
 node dist/main.js process-users --skip-otp
@@ -403,7 +406,7 @@ The automation follows a step-by-step process that mimics human behavior while h
 The automation follows this exact sequence through Upwork's profile creation flow.
 ### Complete Profile Creation Workflow
 
-The automation handles the full 15-step Upwork profile creation process using comprehensive, battle-tested implementations from `src/services/loginAutomation.ts`:
+The automation handles the full 16-step Upwork profile creation process using comprehensive, battle-tested implementations from `src/services/loginAutomation.ts`:
 
 #### **Pre-Onboarding Steps (1-4)**
 **Step 1: Welcome Page**
@@ -507,7 +510,7 @@ The automation handles the full 15-step Upwork profile creation process using co
 - **Language Selection**: Selects languages and proficiency levels
 - **Multiple Languages**: Handles multiple language selections
 
-#### **Final Steps (12-15)**
+#### **Final Steps (12-16)**
 **Step 12: Overview/Bio**
 - URL: `/nx/create-profile/overview`
 - If current path is correct, save current user.session_state. Else mark as failed.
@@ -525,22 +528,29 @@ The automation handles the full 15-step Upwork profile creation process using co
 - If current path is correct, save current user.session_state. Else mark as failed.
 - **Address Filling**: Smart autocomplete for all address fields
 - **Profile Picture**: Uploads default profile picture
+- **Phone Number**: If no user.phone provided, then generate a new phone number.
 - **Phone Verification**: 
-  - **Default Mode**: Uses TextVerified.com API for real SMS codes
+  - **Default Mode**: Uses SMS-Pool API, fallback to SMS-Man if error or insufficient balance.
   - **Skip-OTP Mode**: Uses manual OTP system with database-based codes
-  - **Smart OTP Handling**: Checks for existing codes before requesting new ones
   - **Modal Detection**: Handles both "send verification" and "enter code" modals
-  - **Error Recovery**: Graceful handling of expired codes and API failures
-  - **Fallback Support**: Falls back to test codes if API fails
 - **OTP Modes**:
-  - **TextVerified API**: Real SMS codes from TextVerified.com (default)
-  - **Manual OTP**: Database-based codes set via `set-manual-otp` command
-  - **Default Fallback**: Hardcoded "12345" when other methods fail
+  - **OTP Filling**: Fill the otp once received by the provider
+  - **Error Recovery**: Graceful handling of expired codes and API failures by detecting keyword "Expired" on the otp modes
 
 **Step 15: Profile Submission**
 - URL: `/nx/create-profile/submit`
-- **Final Review**: Completes profile creation process
-- **Success Verification**: Confirms successful profile creation
+- **Handler**: `SubmitStepHandler`
+- **OTP Wait**: Waits for OTP verification to complete and redirect to submit page
+- **Submit Button**: Clicks the "Submit profile" button with robust retry logic
+- **Finish Redirect**: Waits for redirect to `/nx/create-profile/finish` page
+- **Success Verification**: Confirms successful profile creation with screenshots
+
+**Step 16: Profile Completion**
+- URL: `/nx/create-profile/finish`
+- **Handler**: `SubmitStepHandler` (handles both submit and finish)
+- **Success Marking**: Sets `user.success_at` timestamp when reaching finish page
+- **Completion Verification**: Final confirmation of successful profile creation
+- **Process End**: Automation completes successfully
 
 #### 6.3: Automation Architecture & Robustness
 
@@ -696,15 +706,36 @@ The system automatically routes OTP requests based on user's country code:
 - **`src/services/textVerifiedService.ts`**: TextVerified.com API integration (dispatcher for all OTP services)
 - **`src/services/smspoolService.ts`**: SMSPool API integration (GB, UA, ID users)
 - **`src/services/manualOtpService.ts`**: Database-based manual OTP system
+- **`src/services/userService.ts`**: User validation and success marking logic
 - **`src/automation/steps/LocationStepHandler.ts`**: Main OTP automation logic with pre-generation
+- **`src/automation/steps/SubmitStepHandler.ts`**: Profile submission step with robust redirect handling
 - **`src/automation/LoginAutomation.ts`**: OTP handling in main automation flow
 
 #### **OTP Provider Tracking**
 The system now tracks which OTP provider was successfully used for each user:
 - **Database Field**: `otp_provider` column in users table
-- **Possible Values**: `sms_pool`, `sms_man`, `textverified`, `manual`, `default`
+- **Possible Values**: `SMS_POOL`, `SMS_MAN`, `textverified`, `manual`, `default`
 - **Usage**: Analytics, debugging, and service performance monitoring
 - **Migration**: Automatically added via migration `009_add_otp_provider`
+
+#### **Success Validation Requirements**
+The system enforces strict validation before marking users as successful:
+- **Phone Number Required**: User must have a valid phone number (`user.phone` not null/empty)
+- **No Duplicate Success**: User cannot be marked as successful if already successful
+- **Model Validation**: Validation occurs at the service layer, not database level
+- **Centralized Logic**: Validation logic centralized in `UserService.validateUserForSuccess()`
+- **Error Handling**: Proper error messages and logging for validation failures
+
+#### **Submit Step Handler**
+The new SubmitStepHandler provides robust profile submission:
+- **OTP Wait**: Waits for OTP verification to complete and redirect to submit page
+- **Robust Redirects**: 3 max retries for both submit page and finish page redirects
+- **Submit Button**: Clicks the "Submit profile" button with multiple selector fallbacks
+- **Finish Verification**: Waits for redirect to `/nx/create-profile/finish` page
+- **Success Marking**: Sets `user.success_at` timestamp when reaching finish page
+- **Backend Validation**: Ensures user has phone number before marking as successful
+- **Screenshots**: Takes before/after screenshots for debugging
+- **Error Handling**: Comprehensive error detection and reporting
 
 #### Improved Field Verification System
 - **Lenient Verification**: Checks for field content rather than exact matches to avoid false negatives
@@ -918,17 +949,25 @@ npm start wait-otp -- --user-id 1
 # Wait for OTP with custom timeout (60 seconds)
 npm start wait-otp -- --user-id 1 --timeout 60
 
-# Test TextVerified API and list SMS messages
-npm start test-textverified
-
-# Test SMSPool API and get account information
+# Test SMSPool API (Primary OTP Provider)
 npm start test-smspool
 
-# Check SMS messages by phone number
-npm start check-sms -- --phone 2314992031
+# Test SMSPool SMS ordering
+npm start test-smspool-order -- --country US
 
-# Check SMS messages from last 5 minutes only
-npm start check-sms -- --phone 2314992031 --recent
+# Test SMS-Man API (Backup OTP Provider)
+npm start test-smsman
+
+# Test SMS-Man SMS ordering
+npm start test-smsman-order -- --country US
+
+# Check SMS messages by phone number (SMSPool)
+npm start check-sms-by-phone -- --phone 2314992031
+
+# DEPRECATED: TextVerified commands (no longer available)
+# npm start test-textverified
+# npm start check-sms -- --phone 2314992031
+# npm start wait-otp -- --user-id 1
 ```
 
 This command will:
@@ -940,12 +979,15 @@ This command will:
 
 **Environment Variables Required:**
 ```env
-# For US users (TextVerified)
-TEXTVERIFIED_API_KEY=your_api_key
-TEXTVERIFIED_EMAIL=your_email
-
-# For non-US users (SMSPool)
+# Primary OTP Provider (SMSPool)
 SMSPOOL_API_KEY=your_smspool_api_key
+
+# Backup OTP Provider (SMS-Man)
+SMSMAN_API_KEY=your_smsman_api_key
+
+# DEPRECATED: TextVerified (no longer used)
+# TEXTVERIFIED_API_KEY=your_api_key
+# TEXTVERIFIED_EMAIL=your_email
 ```
 
 **Example Output:**
@@ -992,14 +1034,14 @@ This command will:
 ```
 
 **Integration with Automation:**
-The automation now automatically integrates with both TextVerified and SMSPool:
+The automation now automatically integrates with SMSPool (primary) and SMS-Man (backup):
 1. **Real OTP Usage**: Automation uses real OTP from appropriate service instead of hardcoded "12345"
-2. **Country-Based Routing**: 
-   - US users: Uses TextVerified.com API
-   - GB, UA, ID users: Uses SMSPool API
-   - Other countries: Falls back to TextVerified with manual OTP system
+2. **Provider-Based Routing**: 
+   - Primary: Uses SMSPool API for all supported countries
+   - Backup: Uses SMS-Man API if SMSPool fails
+   - Fallback: Uses manual OTP system if both providers fail
 3. **Smart OTP Handling**: Checks for existing OTP before sending code, or gets new OTP after sending
-4. **Fallback Support**: Falls back to test code if API fails
+4. **Fallback Support**: Falls back to test code if both providers fail
 5. **Automatic Integration**: No manual intervention needed - OTP is automatically retrieved and entered
 
 ### Test Proxy Configuration
@@ -1075,9 +1117,10 @@ src/
 │       ├── LanguagesStepHandler.ts # Languages proficiency step
 │       ├── OverviewStepHandler.ts # Bio/overview step
 │       ├── RateStepHandler.ts # Rate setting step
-│       └── LocationStepHandler.ts # Location step with OTP handling
+│       ├── LocationStepHandler.ts # Location step with OTP handling
+│       └── SubmitStepHandler.ts # Submit step with profile submission
 ├── services/                     # Core business logic
-│   ├── loginAutomation.ts        # Complete 15-step profile creation
+│   ├── loginAutomation.ts        # Complete 16-step profile creation
 │   ├── userService.ts            # User database operations
 │   ├── upworkService.ts          # Upwork-specific automation logic
 │   ├── textVerifiedService.ts    # SMS verification API integration (US)
@@ -1121,19 +1164,21 @@ assets/
 
 The OTP handling system consists of four main components:
 
-1. **`textVerifiedService.ts`**: 
-   - Integrates with TextVerified.com API for real SMS codes (US users)
-   - Handles bearer token authentication and API calls
-   - Polls for SMS messages and extracts OTP codes
-   - Supports phone number formatting and country codes
-   - Automatically routes to SMSPool for supported countries (GB, UA, ID)
-
-2. **`smspoolService.ts`**:
-   - Integrates with SMSPool API for real SMS codes (GB, UA, ID users)
+1. **`smspoolService.ts`** (PRIMARY):
+   - Integrates with SMSPool API for real SMS codes (all supported countries)
    - Handles SMS ordering, checking, and OTP extraction
    - Supports country and service discovery
    - Manages order lifecycle and cancellation
    - Provides balance checking and active order management
+   - Primary OTP provider for all countries
+
+2. **`smsManService.ts`** (BACKUP):
+   - Integrates with SMS-Man API for real SMS codes (backup provider)
+   - Handles SMS ordering, checking, and OTP extraction
+   - Supports country and service discovery
+   - Manages order lifecycle and cancellation
+   - Provides balance checking and active order management
+   - Backup OTP provider for supported countries
 
 3. **`manualOtpService.ts`**:
    - Manages manual OTP codes stored in database
@@ -1141,7 +1186,12 @@ The OTP handling system consists of four main components:
    - Handles timeout and polling logic for manual OTP retrieval
    - Auto-clears OTP codes after use
 
-4. **`LocationStepHandler.ts`**:
+4. **`textVerifiedService.ts`** (DEPRECATED):
+   - Previously integrated with TextVerified.com API for real SMS codes
+   - Now deprecated in favor of SMSPool and SMS-Man
+   - Kept for reference but not used in production
+
+5. **`LocationStepHandler.ts`**:
    - Main automation logic for phone verification step
    - Handles OTP input field detection and filling
    - Manages verification button clicking and error detection
@@ -1254,12 +1304,17 @@ ALTER TABLE users ADD COLUMN manual_otp INTEGER;
 
 For SMS verification with real phone numbers:
 
-#### TextVerified.com API (US Users)
-- `TEXTVERIFIED_API_KEY`: Your TextVerified.com API key
-- `TEXTVERIFIED_EMAIL`: Your TextVerified.com account email
-
-#### SMSPool API (GB, UA, ID Users)
+#### SMSPool API (Primary Provider)
 - `SMSPOOL_API_KEY`: Your SMSPool API key
+- Supports all countries: US, GB, UA, ID, CA, AU, DE, FR, IT, ES, NL, BE, AT, CH
+
+#### SMS-Man API (Backup Provider)
+- `SMSMAN_API_KEY`: Your SMS-Man API key
+- Supports countries: US, CA, AU, DE, FR, IT, ES, NL, BE, AT, CH
+
+#### TextVerified.com API (DEPRECATED)
+- `TEXTVERIFIED_API_KEY`: Your TextVerified.com API key (no longer used)
+- `TEXTVERIFIED_EMAIL`: Your TextVerified.com account email (no longer used)
 
 ### Proxy Configuration (Decodo)
 

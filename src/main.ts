@@ -11,7 +11,7 @@ import { UserService } from './services/userService.js';
 import { UpworkService } from './services/upworkService.js';
 import { ResumeGenerator } from './utils/resumeGenerator.js';
 import { SessionService } from './services/sessionService.js';
-import { TextVerifiedService } from './services/textVerifiedService.js';
+// import { TextVerifiedService } from './services/textVerifiedService.js';
 import fs from 'fs';
 
 // Load environment variables
@@ -412,6 +412,12 @@ const processUsersCmd = command({
   name: 'process-users',
   description: 'Process pending users for sign-up automation',
   args: {
+    userId: option({
+      type: number,
+      long: 'user-id',
+      description: 'Process only a specific user by ID (overrides limit)',
+      defaultValue: () => 0,
+    }),
     limit: option({
       type: number,
       long: 'limit',
@@ -488,6 +494,10 @@ const processUsersCmd = command({
       const upworkService = new UpworkService(browserManager, userService);
       
       // Process users
+      if (args.userId > 0) {
+        logger.info(`Single user mode enabled: will process only user ID ${args.userId}`);
+      }
+
       if (args.step) {
         logger.info(`Force-step mode enabled: will start from "${args.step}" step`);
       }
@@ -507,12 +517,13 @@ const processUsersCmd = command({
         if (args.skipOtp) {
           logger.info('Skip-OTP mode enabled: will skip location step except profile picture and redirect to submit page');
         }
-        await upworkService.processPendingUsers(args.limit, { 
+        await upworkService.processPendingUsers(args.userId > 0 ? 1 : args.limit, { 
           uploadOnly: true,
           restoreSession: args.restoreSession,
           skipOtp: args.skipOtp,
           step: args.step,
-          retry: args.retry
+          retry: args.retry,
+          userId: args.userId > 0 ? args.userId : undefined
         });
       } else {
         if (args.noStealth) {
@@ -527,12 +538,13 @@ const processUsersCmd = command({
         if (args.skipLocation) {
           logger.info('Skip-Location mode enabled: will skip the location page and mark rate step as completed');
         }
-        await upworkService.processPendingUsers(args.limit, {
+        await upworkService.processPendingUsers(args.userId > 0 ? 1 : args.limit, {
           restoreSession: args.restoreSession,
           skipOtp: args.skipOtp,
           skipLocation: args.skipLocation,
           step: args.step,
-          retry: args.retry
+          retry: args.retry,
+          userId: args.userId > 0 ? args.userId : undefined
         });
       }
       
@@ -829,37 +841,37 @@ const setManualOtpCmd = command({
   }
 });
 
-// Test TextVerified services command
-const testTextVerifiedCmd = command({
-  name: 'test-textverified',
-  description: 'Test TextVerified.com API and list SMS messages',
-  args: {},
-  handler: async () => {
-    try {
-      logger.info('Testing TextVerified.com API...');
-      
-      // Run migrations first
-      await runMigrations();
-      
-      // Initialize TextVerified service
-      const textVerifiedService = new TextVerifiedService();
-      
-      // Get account details first
-      await textVerifiedService.getAccountDetails();
-      
-      // Get SMS list
-      await textVerifiedService.getSmsList();
-      
-      logger.info('✅ TextVerified API test completed successfully');
-      
-    } catch (error) {
-      logger.error(error, 'Failed to test TextVerified API');
-      process.exit(1);
-    } finally {
-      await closeDatabase();
-    }
-  }
-});
+// Test TextVerified services command (DEPRECATED)
+// const testTextVerifiedCmd = command({
+//   name: 'test-textverified',
+//   description: 'Test TextVerified.com API and list SMS messages (DEPRECATED)',
+//   args: {},
+//   handler: async () => {
+//     try {
+//       logger.info('Testing TextVerified.com API... (DEPRECATED)');
+//       
+//       // Run migrations first
+//       await runMigrations();
+//       
+//       // Initialize TextVerified service
+//       const textVerifiedService = new TextVerifiedService();
+//       
+//       // Get account details first
+//       await textVerifiedService.getAccountDetails();
+//       
+//       // Get SMS list
+//       await textVerifiedService.getSmsList();
+//       
+//       logger.info('✅ TextVerified API test completed successfully');
+//       
+//     } catch (error) {
+//       logger.error(error, 'Failed to test TextVerified API');
+//       process.exit(1);
+//     } finally {
+//       await closeDatabase();
+//     }
+//   }
+// });
 
 // Test SMSPool services command
 const testSmsPoolCmd = command({
@@ -939,9 +951,11 @@ const testSmsPoolOrderCmd = command({
       
       // Order SMS
       logger.info(`Ordering SMS for country ${args.country} with service ${upworkServiceId}...`);
-      const orderId = await smsPoolService.orderSms(args.country, upworkServiceId);
+      const orderResult = await smsPoolService.orderSms(args.country, upworkServiceId);
       
-      logger.info(`✅ SMS ordered successfully! Order ID: ${orderId}`);
+      logger.info(`✅ SMS ordered successfully! Order ID: ${orderResult.orderId}, Phone: ${orderResult.phoneNumber || 'not provided'}`);
+      
+      const orderId = orderResult.orderId;
       
       // Check SMS status
       logger.info('Checking SMS status...');
@@ -964,182 +978,182 @@ const testSmsPoolOrderCmd = command({
   }
 });
 
-// Check SMS messages command
-const checkSmsCmd = command({
-  name: 'check-sms',
-  description: 'Check SMS messages from TextVerified.com API by phone number',
-  args: {
-    phoneNumber: option({
-      type: string,
-      long: 'phone',
-      short: 'p',
-      description: 'Phone number to filter SMS messages (required)',
-    }),
-    recent: flag({
-      type: boolean,
-      long: 'recent',
-      short: 'r',
-      description: 'Only check SMS messages from the last 5 minutes',
-      defaultValue: () => false,
-    }),
-  },
-  handler: async (args) => {
-    try {
-      const timeFilter = args.recent ? ' (last 5 minutes only)' : '';
-      logger.info(`Checking SMS messages for phone number: ${args.phoneNumber}${timeFilter}`);
-      
-      // Run migrations first
-      await runMigrations();
-      
-      // Initialize TextVerified service
-      const textVerifiedService = new TextVerifiedService();
-      
-      // Get account details first
-      await textVerifiedService.getAccountDetails();
-      
-      // Check SMS messages by phone number only
-      const result = await textVerifiedService.checkSmsWithStatus(args.phoneNumber);
-      
-      // Filter by time if requested
-      let filteredData = result.response.data;
-      let filteredCount = result.smsCount;
-      
-      if (args.recent && result.response.data) {
-        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-        filteredData = result.response.data.filter((sms: any) => {
-          const smsDate = new Date(sms.createdAt);
-          return smsDate > fiveMinutesAgo;
-        });
-        filteredCount = filteredData.length;
-        
-        logger.info(`Filtered to ${filteredCount} SMS message(s) from the last 5 minutes`);
-      }
-      
-      // Parse OTP codes from SMS content
-      if (filteredData && filteredData.length > 0) {
-        filteredData = filteredData.map((sms: any) => {
-          const parsedSms = { ...sms };
-          
-          // Extract OTP code from SMS content
-          if (sms.smsContent) {
-            // Look for patterns like "verification code is 12345" or "code is 12345"
-            const otpPatterns = [
-              /verification code is (\d{4,6})/i,
-              /code is (\d{4,6})/i,
-              /code: (\d{4,6})/i,
-              /(\d{4,6})/ // Fallback: any 4-6 digit number
-            ];
-            
-            for (const pattern of otpPatterns) {
-              const match = sms.smsContent.match(pattern);
-              if (match) {
-                parsedSms.extractedOtp = match[1];
-                break;
-              }
-            }
-            
-            // If no OTP found, try to use the parsedCode from API if available
-            if (!parsedSms.extractedOtp && sms.parsedCode) {
-              parsedSms.extractedOtp = sms.parsedCode;
-            }
-          }
-          
-          return parsedSms;
-        });
-      }
-      
-      // Output results
-      console.log(`Status Code: ${result.statusCode}`);
-      console.log(`SMS Count: ${filteredCount}${args.recent ? ' (filtered from last 5 minutes)' : ''}`);
-      
-      // Create filtered response
-      const filteredResponse = {
-        ...result.response,
-        data: filteredData,
-        count: filteredCount
-      };
-      
-      console.log(`Response: ${JSON.stringify(filteredResponse, null, 2)}`);
-      
-      // Display extracted OTP codes
-      if (filteredData && filteredData.length > 0) {
-        console.log('\n📱 Extracted OTP Codes:');
-        filteredData.forEach((sms: any, index: number) => {
-          const timestamp = new Date(sms.createdAt).toLocaleString();
-          const otp = sms.extractedOtp || 'Not found';
-          console.log(`${index + 1}. [${timestamp}] OTP: ${otp}`);
-          if (sms.smsContent) {
-            console.log(`   Message: ${sms.smsContent.trim()}`);
-          }
-        });
-      }
-      
-      if (filteredCount > 0) {
-        logger.info(`✅ Found ${filteredCount} SMS message(s) for ${args.phoneNumber}${args.recent ? ' in the last 5 minutes' : ''}`);
-      } else {
-        logger.info(`ℹ️ No SMS messages found for ${args.phoneNumber}${args.recent ? ' in the last 5 minutes' : ''}`);
-      }
-      
-    } catch (error) {
-      logger.error(error, 'Failed to check SMS messages');
-      process.exit(1);
-    } finally {
-      await closeDatabase();
-    }
-  }
-});
+// Check SMS messages command (DEPRECATED - TextVerified)
+// const checkSmsCmd = command({
+//   name: 'check-sms',
+//   description: 'Check SMS messages from TextVerified.com API by phone number (DEPRECATED)',
+//   args: {
+//     phoneNumber: option({
+//       type: string,
+//       long: 'phone',
+//       short: 'p',
+//       description: 'Phone number to filter SMS messages (required)',
+//     }),
+//     recent: flag({
+//       type: boolean,
+//       long: 'recent',
+//       short: 'r',
+//       description: 'Only check SMS messages from the last 5 minutes',
+//       defaultValue: () => false,
+//     }),
+// //   },
+//   handler: async (args) => {
+//     try {
+//       const timeFilter = args.recent ? ' (last 5 minutes only)' : '';
+//       logger.info(`Checking SMS messages for phone number: ${args.phoneNumber}${timeFilter}`);
+//       
+//       // Run migrations first
+//       await runMigrations();
+//       
+//       // Initialize TextVerified service
+//       const textVerifiedService = new TextVerifiedService();
+//       
+//       // Get account details first
+//       await textVerifiedService.getAccountDetails();
+//       
+//       // Check SMS messages by phone number only
+//       const result = await textVerifiedService.checkSmsWithStatus(args.phoneNumber);
+//       
+//       // Filter by time if requested
+//       let filteredData = result.response.data;
+//       let filteredCount = result.smsCount;
+//       
+//       if (args.recent && result.response.data) {
+//         const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+//         filteredData = result.response.data.filter((sms: any) => {
+//           const smsDate = new Date(sms.createdAt);
+//           return smsDate > fiveMinutesAgo;
+//         });
+//         filteredCount = filteredData.length;
+//         
+//         logger.info(`Filtered to ${filteredCount} SMS message(s) from the last 5 minutes`);
+//       }
+//       
+//       // Parse OTP codes from SMS content
+//       if (filteredData && filteredData.length > 0) {
+//         filteredData = filteredData.map((sms: any) => {
+//           const parsedSms = { ...sms };
+//           
+//           // Extract OTP code from SMS content
+//           if (sms.smsContent) {
+//             // Look for patterns like "verification code is 12345" or "code is 12345"
+//             const otpPatterns = [
+//               /verification code is (\d{4,6})/i,
+//               /code is (\d{4,6})/i,
+//               /code: (\d{4,6})/i,
+//               /(\d{4,6})/ // Fallback: any 4-6 digit number
+//             ];
+//             
+//             for (const pattern of otpPatterns) {
+//               const match = sms.smsContent.match(pattern);
+//               stepHandler.ts
+//               if (match) {
+//                 parsedSms.extractedOtp = match[1];
+//                 break;
+//               }
+//             }
+//             
+//             // If no OTP found, try to use the parsedCode from API if available
+//             if (!parsedSms.extractedOtp && sms.parsedCode) {
+//               parsedSms.extractedOtp = sms.parsedCode;
+//             }
+//           }
+//           
+//           return parsedSms;
+//         });
+//       }
+//       
+//       // Output results
+//       console.log(`Status Code: ${result.statusCode}`);
+//       console.log(`SMS Count: ${filteredCount}${args.recent ? ' (filtered from last 5 minutes)' : ''}`);
+//       
+//       // Create filtered response
+//       const filteredResponse = {
+//         ...result.response,
+//         data: filteredData,
+//         count: filteredCount
+//       };
+//       
+//       console.log(`Response: ${JSON.stringify(filteredResponse, null, 2)}`);
+//       
+//       // Display extracted OTP codes
+//       if (filteredData && filteredData.length > 0) {
+//         console.log('\n📱 Extracted OTP Codes:');
+//         filteredData.forEach((sms: any, index: number) => {
+//           const timestamp = new Date(sms.createdAt).toLocaleString();
+//           const otp = sms.extractedOtp || 'Not found';
+//           console.log(`${index + 1}. [${timestamp}] OTP: ${otp}`);
+//           if (sms.smsContent) {
+//             console.log(`   Message: ${sms.smsContent.trim()}`);
+//           }
+//         });
+//       }
+//       
+//       if (filteredCount > 0) {
+//         logger.info(`✅ Found ${filteredCount} SMS message(s) for ${args.phoneNumber}${args.recent ? ' in the last 5 minutes' : ''}`);
+//       } else {
+//         logger.info(`ℹ️ No SMS messages found for ${args.phoneNumber}${args.recent ? ' in the last 5 minutes' : ''}`);
+//       }
+//       
+//     } catch (error) {
+//       logger.error(error, 'Failed to check SMS messages');
+//       process.exit(1);
+//     } finally {
+//       await closeDatabase();
+//     }
+//   }
+// });
 
-// Wait for OTP command
-const waitOtpCmd = command({
-  name: 'wait-otp',
-  description: 'Wait for OTP from TextVerified.com API for a specific user',
-  args: {
-    userId: option({
-      type: number,
-      long: 'user-id',
-      short: 'u',
-      description: 'User ID to wait for OTP',
-    }),
-    timeout: option({
-      type: number,
-      long: 'timeout',
-      short: 't',
-      description: 'Timeout in seconds',
-      defaultValue: () => 180,
-    }),
-  },
-  handler: async (args) => {
-    try {
-      logger.info(`Waiting for OTP for user ${args.userId} (timeout: ${args.timeout}s)`);
-      
-      // Run migrations first
-      await runMigrations();
-      
-      // Initialize TextVerified service
-      const textVerifiedService = new TextVerifiedService();
-      
-      // Get account details first
-      await textVerifiedService.getAccountDetails();
-      
-      // Wait for OTP
-      const otp = await textVerifiedService.waitForOTP(args.userId, args.timeout);
-      
-      if (otp) {
-        logger.info(`✅ OTP received: ${otp}`);
-        console.log(`OTP: ${otp}`);
-      } else {
-        logger.warn('❌ No OTP received within timeout period');
-        process.exit(1);
-      }
-      
-    } catch (error) {
-      logger.error(error, 'Failed to wait for OTP');
-      process.exit(1);
-    } finally {
-      await closeDatabase();
-    }
-  }
-});
+// Wait for OTP command (DEPRECATED - TextVerified)
+// const waitOtpCmd = command({
+//   name: 'wait-otp',
+//   description: 'Wait for OTP from TextVerified.com API for a specific user (DEPRECATED)',
+//   args: {
+//     userId: option({
+//       type: number,
+//       long: 'user-id',
+//       short: 'u',
+//       description: 'User ID to wait for OTP',
+//     }),
+//     timeout: option({
+//       type: number,
+//       long: 'timeout',
+//       short: 't',
+//       description: 'Timeout in seconds',
+//       defaultValue: () => 180,
+//     }),
+//   },
+//   handler: async (args) => {
+//     try {
+//       logger.info(`Waiting for OTP for user ${args.userId} (timeout: ${args.timeout}s)`);
+//       
+//       // Run migrations first
+//       await runMigrations();
+//       
+//       // Initialize TextVerified service
+//       const textVerifiedService = new TextVerifiedService();
+//       
+//       // Get account details first
+//       await textVerifiedService.getAccountDetails();
+//       
+//       // Wait for OTP
+//       const otp = await textVerifiedService.waitForOTP(args.userId, args.timeout);
+//       
+//       if (otp) {
+//         logger.info(`✅ OTP received: ${otp}`);
+//         console.log(`OTP: ${otp}`);
+//       } else {
+//         logger.warn('❌ No OTP received within timeout period');
+//         process.exit(1);
+//       }
+//       
+//     } catch (error) {
+//       logger.error(error, 'Failed to wait for OTP');
+//       process.exit(1);
+//       await closeDatabase();
+//     }
+//   }
+// });
 
 // Check specific SMS order command
 const checkSmsOrderCmd = command({
@@ -1245,6 +1259,109 @@ const listActiveOrdersCmd = command({
   }
 });
 
+// Test SMS-Man services command
+const testSmsManCmd = command({
+  name: 'test-smsman',
+  description: 'Test SMS-Man API services',
+  args: {},
+  handler: async () => {
+    try {
+      logger.info('Testing SMS-Man API...');
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize SMS-Man service
+      const { SmsManService } = await import('./services/smsManService.js');
+      const smsManService = new SmsManService();
+      
+      // Get account balance
+      const balance = await smsManService.getBalance();
+      logger.info(`SMS-Man balance: ${balance}`);
+      
+      // Get countries
+      const countries = await smsManService.getCountries();
+      logger.info(`Found ${countries.length} countries`);
+      
+      // Get services
+      const services = await smsManService.getServices();
+      logger.info(`Found ${services.length} services`);
+      
+      logger.info('✅ SMS-Man API test completed successfully');
+      
+    } catch (error) {
+      logger.error(error, 'Failed to test SMS-Man API');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// Test SMS-Man SMS ordering command
+const testSmsManOrderCmd = command({
+  name: 'test-smsman-order',
+  description: 'Test SMS-Man SMS ordering for a specific country',
+  args: {
+    country: option({
+      type: string,
+      long: 'country',
+      short: 'c',
+      description: 'Country code (e.g., US, CA, AU, DE, FR, IT, ES, NL, BE, AT, CH)',
+      defaultValue: () => 'US',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info(`Testing SMS-Man SMS ordering for country: ${args.country}`);
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize SMS-Man service
+      const { SmsManService } = await import('./services/smsManService.js');
+      const smsManService = new SmsManService();
+      
+      // Get account balance
+      const balance = await smsManService.getBalance();
+      logger.info(`Account balance: ${balance}`);
+      
+      // Find Upwork service
+      const upworkServiceId = await smsManService.findUpworkService();
+      if (!upworkServiceId) {
+        throw new Error('Upwork service not found');
+      }
+      logger.info(`Upwork service ID: ${upworkServiceId}`);
+      
+      // Order SMS
+      logger.info(`Ordering SMS for country ${args.country} with service ${upworkServiceId}...`);
+      const orderResult = await smsManService.orderSms(args.country, upworkServiceId);
+      
+      logger.info(`✅ SMS ordered successfully! Order ID: ${orderResult.orderId}, Phone: ${orderResult.phoneNumber || 'not provided'}`);
+      
+      const orderId = orderResult.orderId;
+      
+      // Check SMS status
+      logger.info('Checking SMS status...');
+      const order = await smsManService.checkSms(orderId);
+      
+      if (order) {
+        logger.info(`SMS Status: ${order.status}`);
+        logger.info(`Phone Number: ${order.phonenumber}`);
+        if (order.code) {
+          logger.info(`OTP Code: ${order.code}`);
+        }
+      }
+      
+    } catch (error) {
+      logger.error(error, 'Failed to test SMS-Man SMS ordering');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
 // Check SMS by phone number command
 const checkSmsByPhoneCmd = command({
   name: 'check-sms-by-phone',
@@ -1270,12 +1387,17 @@ const checkSmsByPhoneCmd = command({
       const smsPoolService = new SmsPoolService();
       
       // Get active orders and find the one with matching phone
-      const orders = await smsPoolService.getActiveOrders();
-      const matchingOrder = orders.find(order => order.phonenumber === args.phone);
+      const activeOrders = await smsPoolService.getActiveOrders();
+      let matchingOrder = activeOrders.find(order => {
+        const orderPhone = order.phonenumber || '';
+        const searchPhone = args.phone.replace('+', ''); // Remove + prefix for comparison
+        return orderPhone === searchPhone || orderPhone === args.phone;
+      });
       
       if (matchingOrder) {
-        logger.info(`✅ Found order for phone ${args.phone}:`);
-        logger.info(`  Order ID: ${matchingOrder.orderid || 'N/A'}`);
+        logger.info(`✅ Found ACTIVE order for phone ${args.phone}:`);
+        const orderId = matchingOrder.order_code || matchingOrder.orderid || 'N/A';
+        logger.info(`  Order ID: ${orderId}`);
         logger.info(`  Phone Number: ${matchingOrder.phonenumber}`);
         logger.info(`  Status: ${matchingOrder.status}`);
         logger.info(`  Timestamp: ${matchingOrder.timestamp}`);
@@ -1295,11 +1417,116 @@ const checkSmsByPhoneCmd = command({
           logger.info(`  Time Left: ${matchingOrder.time_left}`);
         }
       } else {
-        logger.warn(`❌ No order found for phone ${args.phone}`);
+        // Check history orders if not found in active orders
+        logger.info(`No active order found, checking history orders...`);
+        const historyOrders = await smsPoolService.getHistoryOrders();
+        
+        // Debug: Show available phone numbers in history
+        logger.info(`Available phone numbers in history: ${historyOrders.map(o => o.phonenumber).join(', ')}`);
+        
+        matchingOrder = historyOrders.find(order => {
+          const orderPhone = order.phonenumber || '';
+          const searchPhone = args.phone.replace('+', ''); // Remove + prefix for comparison
+          return orderPhone === searchPhone || orderPhone === args.phone;
+        });
+        
+        if (matchingOrder) {
+          logger.info(`✅ Found HISTORY order for phone ${args.phone}:`);
+          const orderId = matchingOrder.order_code || matchingOrder.orderid || 'N/A';
+          logger.info(`  Order ID: ${orderId}`);
+          logger.info(`  Phone Number: ${matchingOrder.phonenumber}`);
+          logger.info(`  Status: ${matchingOrder.status}`);
+          logger.info(`  Timestamp: ${matchingOrder.timestamp}`);
+          
+          if (matchingOrder.code && matchingOrder.code !== '0') {
+            logger.info(`  ✅ OTP Code: ${matchingOrder.code}`);
+            console.log(`OTP: ${matchingOrder.code}`);
+          } else {
+            logger.info(`  ⏳ OTP Code: Not received yet`);
+          }
+          
+          if (matchingOrder.completed_on) {
+            logger.info(`  Completed: ${matchingOrder.completed_on}`);
+          }
+          
+          if (matchingOrder.time_left) {
+            logger.info(`  Time Left: ${matchingOrder.time_left}`);
+          }
+        } else {
+          logger.warn(`❌ No order found for phone ${args.phone} in active or history orders`);
+        }
       }
       
     } catch (error) {
       logger.error(error, 'Failed to check SMS by phone');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// Test OTP retrieval command
+const testOtpRetrievalCmd = command({
+  name: 'test-otp-retrieval',
+  description: 'Test OTP retrieval from SMSPool for a specific phone number',
+  args: {
+    phone: option({
+      type: string,
+      long: 'phone',
+      short: 'p',
+      description: 'Phone number to test OTP retrieval',
+      defaultValue: () => '+447723541502',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info(`Testing OTP retrieval for phone: ${args.phone}`);
+      
+      // Run migrations first
+      await runMigrations();
+      
+      // Initialize SMSPool service
+      const { SmsPoolService } = await import('./services/smspoolService.js');
+      const smsPoolService = new SmsPoolService();
+      
+      // Test the exact flow that LocationStepHandler uses
+      const phoneNumber = args.phone.replace('+', ''); // Remove + prefix
+      logger.info(`Testing LocationStepHandler OTP retrieval flow for phone: ${phoneNumber}`);
+      
+      // First, check if phone number is active (like LocationStepHandler does)
+      const isActive = await smsPoolService.getActiveOrders().then(orders => {
+        const matchingOrder = orders.find(order => {
+          const orderPhone = order.phonenumber || '';
+          const cleanOrderPhone = orderPhone.replace(/\D/g, '');
+          const cleanUserPhone = phoneNumber.replace(/\D/g, '');
+          
+          return orderPhone === phoneNumber || 
+                 cleanOrderPhone === cleanUserPhone ||
+                 orderPhone.includes(cleanUserPhone) ||
+                 cleanOrderPhone.includes(cleanUserPhone);
+        });
+        return !!matchingOrder;
+      });
+      
+      logger.info(`Phone number ${phoneNumber} is active: ${isActive}`);
+      
+      if (isActive) {
+        // Now get OTP (like LocationStepHandler does)
+        const otpCode = await smsPoolService.waitForOTP(1, 'GB', 60); // 60 seconds timeout for testing
+        
+        if (otpCode) {
+          logger.info(`✅ Successfully retrieved OTP: ${otpCode}`);
+          console.log(`OTP: ${otpCode}`);
+        } else {
+          logger.warn(`❌ No OTP retrieved within timeout`);
+        }
+      } else {
+        logger.warn(`❌ Phone number ${phoneNumber} is not active`);
+      }
+      
+    } catch (error) {
+      logger.error(error, 'Failed to test OTP retrieval');
       process.exit(1);
     } finally {
       await closeDatabase();
@@ -1371,15 +1598,15 @@ switch (commandName) {
   case 'import-csv':
     await run(importCsvCmd, commandArgs);
     break;
-  case 'test-textverified':
-    await run(testTextVerifiedCmd, commandArgs);
-    break;
-  case 'check-sms':
-    await run(checkSmsCmd, commandArgs);
-    break;
-  case 'wait-otp':
-    await run(waitOtpCmd, commandArgs);
-    break;
+  // case 'test-textverified':
+  //   await run(testTextVerifiedCmd, commandArgs);
+  //   break;
+  // case 'check-sms':
+  //   await run(checkSmsCmd, commandArgs);
+  //   break;
+  // case 'wait-otp':
+  //   await run(waitOtpCmd, commandArgs);
+  //   break;
   case 'set-manual-otp':
     await run(setManualOtpCmd, commandArgs);
     break;
@@ -1397,6 +1624,15 @@ switch (commandName) {
     break;
   case 'check-sms-by-phone':
     await run(checkSmsByPhoneCmd, commandArgs);
+    break;
+  case 'test-smsman':
+    await run(testSmsManCmd, commandArgs);
+    break;
+  case 'test-smsman-order':
+    await run(testSmsManOrderCmd, commandArgs);
+    break;
+  case 'test-otp-retrieval':
+    await run(testOtpRetrievalCmd, commandArgs);
     break;
   default:
     await run(mainCmd, process.argv.slice(2));

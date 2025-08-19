@@ -86,7 +86,23 @@ export class FormAutomation extends BaseAutomation {
       );
     }
     
-    logger.info('Password field found, proceeding with entry...');
+    // Verify this is actually a password field and not an email field
+    const fieldType = await field.evaluate((el: Element) => (el as HTMLInputElement).type);
+    const fieldId = await field.evaluate((el: Element) => (el as HTMLInputElement).id);
+    const fieldName = await field.evaluate((el: Element) => (el as HTMLInputElement).name);
+    
+    logger.info(`Found field - Type: ${fieldType}, ID: ${fieldId}, Name: ${fieldName}`);
+    
+    // Additional verification that this is the password field
+    if (fieldType !== 'password' && !fieldId?.includes('password') && !fieldName?.includes('password')) {
+      logger.error('Found field is not a password field!');
+      return this.createError(
+        'WRONG_FIELD_TYPE',
+        `Found field is not a password field - Type: ${fieldType}, ID: ${fieldId}, Name: ${fieldName}`
+      );
+    }
+    
+    logger.info('Password field found and verified, proceeding with entry...');
 
     // Focus the field first and wait
     await field.focus();
@@ -109,10 +125,10 @@ export class FormAutomation extends BaseAutomation {
       await this.randomDelay(300, 500);
     }
     
-    // Type password very carefully
+    // Type password very carefully using the field directly
     const chars = password.split('');
     for (const char of chars) {
-      await this.page.keyboard.type(char);
+      await field.type(char);
       // Even slower typing for passwords
       await this.randomDelay(150, 400);
     }
@@ -142,9 +158,9 @@ export class FormAutomation extends BaseAutomation {
     await this.page.keyboard.press('Backspace');
     await this.randomDelay(500, 1000);
     
-    // Type even slower
+    // Type even slower using the field directly
     for (const char of chars) {
-      await this.page.keyboard.type(char);
+      await field.type(char);
       await this.randomDelay(200, 500);
     }
     

@@ -3681,7 +3681,7 @@ export class LoginAutomation {
           case 'UA':
             expectedCountry = 'Ukraine';
             break;
-          case 'UK':
+          case 'GB':
             expectedCountry = 'United Kingdom';
             break;
           default:

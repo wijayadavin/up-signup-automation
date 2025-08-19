@@ -376,4 +376,45 @@ export class UserService {
       throw error;
     }
   }
+
+  /**
+   * Validates that a user can be marked as successful
+   * @param user The user to validate
+   * @throws Error if user cannot be marked as successful
+   */
+  validateUserForSuccess(user: User): void {
+    // Model validation: ensure user has a phone number
+    if (!user.phone || user.phone.trim() === '') {
+      throw new Error(`User ${user.id} must have a phone number to be marked as successful`);
+    }
+
+    // Check if user is already marked as successful
+    if (user.success_at) {
+      throw new Error(`User ${user.id} is already marked as successful at ${user.success_at}`);
+    }
+  }
+
+  /**
+   * Marks a user as successful with validation
+   * @param userId The user ID to mark as successful
+   * @param user The user object for validation
+   * @throws Error if validation fails
+   */
+  async markUserAsSuccessful(userId: number, user: User): Promise<void> {
+    // Validate user can be marked as successful
+    this.validateUserForSuccess(user);
+
+    try {
+      await this.db
+        .updateTable('users')
+        .set({ success_at: new Date() })
+        .where('id', '=', userId)
+        .execute();
+
+      logger.info({ userId }, 'User marked as successful');
+    } catch (error) {
+      logger.error(error, 'Failed to mark user as successful');
+      throw error;
+    }
+  }
 }

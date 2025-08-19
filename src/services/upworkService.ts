@@ -438,10 +438,25 @@ export class UpworkService {
     }
   }
 
-  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string; retry?: boolean }): Promise<void> {
+  async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string; retry?: boolean; userId?: number }): Promise<void> {
     try {
       // First, process normal pending users (excluding captcha-flagged)
-      const normalUsers = await this.userService.getPendingUsers(limit);
+      let normalUsers: User[];
+      
+      if (options?.userId) {
+        // Process specific user by ID
+        const specificUser = await this.userService.getUserById(options.userId);
+        if (specificUser) {
+          normalUsers = [specificUser];
+          logger.info({ userId: options.userId }, 'Processing specific user by ID');
+        } else {
+          logger.error({ userId: options.userId }, 'User not found');
+          return;
+        }
+      } else {
+        // Process pending users normally
+        normalUsers = await this.userService.getPendingUsers(limit);
+      }
       
       if (normalUsers.length > 0) {
         logger.info({ count: normalUsers.length }, 'Processing normal pending users (excluding captcha-flagged)');
