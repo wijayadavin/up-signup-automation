@@ -176,8 +176,15 @@ export class SmsPoolService {
       formData.append('country', countryId);
       formData.append('service', finalServiceId);
       formData.append('quantity', '1');
+      formData.append('max_price', '0.6'); // Set max price to 0.6 by default
 
-      logger.info(`Ordering SMS for country ${countryCode} (ID: ${countryId}), service ${finalServiceId}`);
+      // Add pool configuration for specific countries
+      if (countryCode.toUpperCase() === 'UA') {
+        formData.append('pool', '2');
+        logger.info(`Ordering SMS for country ${countryCode} (ID: ${countryId}), service ${finalServiceId}, pool 2, max_price 0.6`);
+      } else {
+        logger.info(`Ordering SMS for country ${countryCode} (ID: ${countryId}), service ${finalServiceId}, max_price 0.6`);
+      }
 
       const response = await fetch(`${this.baseUrl}/purchase/sms`, {
         method: 'POST',

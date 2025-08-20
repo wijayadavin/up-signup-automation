@@ -32,81 +32,19 @@ export class EmploymentStepHandler extends StepHandler {
     }
   }
 
-  private async checkIfFirstLetterTyped(expectedText: string): Promise<boolean> {
-    try {
-      // Get the currently focused element and its value
-      const focusedElement = await this.page.evaluate(() => {
-        const activeEl = document.activeElement;
-        if (!activeEl) return '';
-        
-        // Handle both input and textarea elements
-        if (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) {
-          return activeEl.value;
-        }
-        
-        // For contenteditable or other elements
-        return activeEl.textContent || '';
-      });
-      
-      // For empty or undefined text, return false
-      if (!expectedText) {
-        logger.warn('Expected text is empty');
-        return false;
-      }
-      
-      // Check if the first letter of expected text is in the focused element
-      const firstLetter = expectedText.charAt(0).toLowerCase();
-      const hasFirstLetter = focusedElement.toLowerCase().includes(firstLetter);
-      
-      logger.info(`Checking if first letter was typed - Expected: "${expectedText}", Current: "${focusedElement}", Has first letter: ${hasFirstLetter}`);
-      return hasFirstLetter;
-    } catch (error) {
-      logger.warn('Error checking if first letter was typed:', error);
-      return false;
-    }
-  }
-
-  private async typeWithVerification(text: string, retries: number = 3): Promise<void> {
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      logger.info(`Attempt ${attempt} to type "${text}"`);
-      
-      // Type the text
-      await this.typeHumanLike(text);
-      await this.randomDelay(150, 300);
-      
-      // Verify first letter was typed
-      const isTyped = await this.checkIfFirstLetterTyped(text);
-      if (isTyped) {
-        logger.info('Text verified as typed correctly');
-        return;
-      }
-      
-      // If not typed correctly and we have retries left, clear and try again
-      if (attempt < retries) {
-        logger.warn('Text not typed correctly, clearing and retrying...');
-        await this.page.keyboard.down('Control');
-        await this.page.keyboard.press('a');
-        await this.page.keyboard.up('Control');
-        await this.page.keyboard.press('Backspace');
-        await this.randomDelay(150, 300);
-      }
+  private async fillFieldWithVerification(fieldSelectors: string[], value: string, fieldName: string): Promise<AutomationResult> {
+    logger.info(`Filling ${fieldName} field with value: "${value}"`);
+    
+    // Use the common fillField method from FormAutomation
+    const result = await this.formAutomation.fillField(fieldSelectors, value, fieldName);
+    
+    if (result.status === 'success') {
+      logger.info(`✅ ${fieldName} field filled successfully`);
+    } else {
+      logger.warn(`⚠️ ${fieldName} field filling failed: ${result.evidence}`);
     }
     
-    logger.warn(`Failed to verify text "${text}" was typed after ${retries} attempts`);
-  }
-
-  private async focusTitleInput(): Promise<void> {
-    try {
-      // Try to focus the specific title input element
-      const titleInput = await this.page.$('input[role="combobox"][aria-labelledby="title-label"]');
-      if (titleInput) {
-        await titleInput.click();
-        await this.randomDelay(150, 300);
-        logger.info('Focused title input using specific selector');
-      }
-    } catch (error) {
-      logger.warn('Could not focus title input with specific selector, continuing with tab navigation...');
-    }
+    return result;
   }
 
   async execute(options?: { uploadOnly?: boolean; skipOtp?: boolean; skipLocation?: boolean }): Promise<AutomationResult> {
@@ -222,50 +160,47 @@ export class EmploymentStepHandler extends StepHandler {
         work_description: 'Developed full-stack web applications using modern technologies. Led a team of 5 developers and implemented CI/CD pipelines.'
       };
 
-      // Fill title field using tab navigation
-      logger.info('Filling title field using tab navigation...');
+      // Fill title field using robust field filling
+      logger.info('Filling title field...');
+      const titleResult = await this.fillFieldWithVerification(
+        ['input[role="combobox"][aria-labelledby="title-label"]', 'input[placeholder*="Software Engineer"]'],
+        employmentData.work_title,
+        'Title'
+      );
       
-      // Focus title field
-      await this.page.keyboard.press('Tab'); // Focus combo box close button
-      await this.randomDelay(150, 300);
-      await this.page.keyboard.press('Tab'); // Focus title field
-      await this.randomDelay(300, 600);
-      
-      // Type the title with verification
-      await this.typeWithVerification(employmentData.work_title);
-      await this.randomDelay(300, 600);
+      if (titleResult.status !== 'success') {
+        logger.warn('Title field filling failed, but continuing...');
+      }
       
       // Handle combobox selection for title
       await this.handleComboboxSelection();
       
-      // Fill company field using tab navigation
-      logger.info('Filling company field using tab navigation...');
+      // Fill company field using robust field filling
+      logger.info('Filling company field...');
+      const companyResult = await this.fillFieldWithVerification(
+        ['input[aria-labelledby="company-label"]', 'input[placeholder*="Company"]'],
+        employmentData.work_company_name,
+        'Company'
+      );
       
-      // Tab to company field
-      await this.page.keyboard.press('Tab'); // Focus combo box close button
-      await this.randomDelay(150, 300);
-      await this.page.keyboard.press('Tab'); // Focus company field
-      await this.randomDelay(150, 300);
-      
-      // Type the company with verification
-      await this.typeWithVerification(employmentData.work_company_name);
-      await this.randomDelay(300, 600);
+      if (companyResult.status !== 'success') {
+        logger.warn('Company field filling failed, but continuing...');
+      }
       
       // Handle combobox selection for company
       await this.handleComboboxSelection();
 
-      // Fill location field using tab navigation
-      logger.info('Filling location field using tab navigation...');
+      // Fill location field using robust field filling
+      logger.info('Filling location field...');
+      const locationResult = await this.fillFieldWithVerification(
+        ['input[placeholder*="London"]', 'input[placeholder*="Ex:"]'],
+        'New York',
+        'Location'
+      );
       
-      // Tab to location field
-      await this.page.keyboard.press('Tab'); // Focus combo box close button
-      await this.randomDelay(150, 300);
-      await this.page.keyboard.press('Tab'); // Focus location field
-      await this.randomDelay(1000, 1500); // Longer delay before typing
-
-      // Type location with verification
-      await this.typeWithVerification('New York');
-      await this.randomDelay(300, 600);
+      if (locationResult.status !== 'success') {
+        logger.warn('Location field filling failed, but continuing...');
+      }
       
       // Handle combobox selection for location
       await this.handleComboboxSelection();
@@ -293,7 +228,16 @@ export class EmploymentStepHandler extends StepHandler {
       await this.randomDelay(1000, 1500); // Delay before typing
       
       // 4. Type the country with verification
-      await this.typeWithVerification('United States');
+      const countryResult = await this.fillFieldWithVerification(
+        ['input[type="search"]', 'input[placeholder*="Search"]'],
+        'United States',
+        'Country'
+      );
+      
+      if (countryResult.status !== 'success') {
+        logger.warn('Country field filling failed, but continuing...');
+      }
+      
       await this.randomDelay(300, 600);
       
       // 5. Press down + enter to select
@@ -335,7 +279,16 @@ export class EmploymentStepHandler extends StepHandler {
       await this.randomDelay(1000, 1500);
       
       // Type the year with verification
-      await this.typeWithVerification(employmentData.work_start_year);
+      const yearResult = await this.fillFieldWithVerification(
+        ['input[type="search"]', 'input[placeholder*="Year"]'],
+        employmentData.work_start_year,
+        'Start Year'
+      );
+      
+      if (yearResult.status !== 'success') {
+        logger.warn('Start year field filling failed, but continuing...');
+      }
+      
       await this.randomDelay(1000, 1500);
       
       // Press down and enter to select

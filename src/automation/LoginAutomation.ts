@@ -617,24 +617,52 @@ export class LoginAutomation extends BaseAutomation {
         // Re-detect current path before executing each step and realign if needed
         const urlNow = this.page.url();
         const detectedNow = this.detectProfileStep(urlNow);
-        if (detectedNow !== stepName && detectedNow !== 'initial') {
-          logger.info(`Detected current step '${detectedNow}' differs from planned '${stepName}'. Realigning execution order.`);
-          i = this.getStepIndex(detectedNow) - 1; // -1 because for-loop will ++i
-          continue;
-        }
-        let stepResult: AutomationResult;
         
-        // Use step handler if available, otherwise use legacy method
-        if (this.stepHandlers.has(stepName)) {
-          logger.info(`Using step handler for: ${stepName}`);
-          const handler = this.stepHandlers.get(stepName);
-          // Pass options to step handler
-          stepResult = await handler.execute(options);
-        } else {
-          logger.warn(`No step handler found for: ${stepName}, using legacy handling`);
-          // Fallback to legacy step handling
-          stepResult = await this.handleLegacyStep(stepName);
+        // Enhanced step detection and routing with 3 max retries
+        if (detectedNow !== stepName && detectedNow !== 'initial') {
+          logger.info(`Detected current step '${detectedNow}' differs from planned '${stepName}'. Attempting to run detected step first.`);
+          
+          // Try to run the detected step first (up to 3 attempts)
+          let detectedStepSuccess = false;
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            logger.info(`Attempt ${attempt}/3: Running detected step '${detectedNow}' instead of planned '${stepName}'`);
+            
+            const detectedStepResult = await this.executeStep(detectedNow, options);
+            if (detectedStepResult.status === 'success') {
+              logger.info(`✅ Successfully executed detected step '${detectedNow}' on attempt ${attempt}`);
+              detectedStepSuccess = true;
+              break;
+            } else {
+              logger.warn(`❌ Failed to execute detected step '${detectedNow}' on attempt ${attempt}: ${detectedStepResult.error_code}`);
+              if (attempt < 3) {
+                await this.randomDelay(3000, 5000);
+              }
+            }
+          }
+          
+          if (!detectedStepSuccess) {
+            logger.error(`Failed to execute detected step '${detectedNow}' after 3 attempts. Logging failure and continuing with planned step.`);
+            // Log the failure but continue with the planned step
+          }
+          
+          // Re-detect the current step after attempting the detected step
+          const newUrl = this.page.url();
+          const newDetected = this.detectProfileStep(newUrl);
+          logger.info(`After attempting ${detectedNow}, now on step: ${newDetected}`);
+          
+          // If we're now on the planned step, continue normally
+          if (newDetected === stepName) {
+            logger.info(`Now on planned step '${stepName}', continuing normally`);
+          } else if (newDetected !== 'initial' && newDetected !== 'unknown') {
+            // If we're on a different step, realign
+            logger.info(`Realigning to new detected step '${newDetected}'`);
+            i = this.getStepIndex(newDetected) - 1; // -1 because for-loop will ++i
+            continue;
+          }
         }
+        
+        // Execute the current step
+        const stepResult = await this.executeStep(stepName, options);
         
         // Check if step failed
         if (stepResult.status !== 'success') {
@@ -643,18 +671,51 @@ export class LoginAutomation extends BaseAutomation {
         
         // Special handling for location step completion
         if (stepName === 'location') {
-          logger.info('Location step completed successfully, verifying we are on location page...');
+          logger.info('Location step completed successfully, checking current page...');
           
-          // Verify we're actually on the location page
+          // Wait a bit for any redirects to complete
+          await this.randomDelay(3000, 5000);
+          
+          // Check current URL after location step completion
           const currentUrl = this.page.url();
+          const detectedStep = this.detectProfileStep(currentUrl);
+          
           if (currentUrl.includes('/nx/create-profile/location')) {
             logger.info('✅ Successfully reached location page, waiting 10 seconds...');
             await this.randomDelay(10000, 10000); // Wait exactly 10 seconds
             logger.info('✅ Automation completed successfully - reached location page and waited 10 seconds');
             return this.createSuccess('done');
+          } else if (currentUrl.includes('/nx/create-profile/submit')) {
+            logger.info('✅ Location step completed and redirected to submit page - running submit handler');
+            // Run the submit step handler
+            const submitResult = await this.executeStep('submit', options);
+            if (submitResult.status === 'success') {
+              logger.info('✅ Submit step completed successfully');
+              return this.createSuccess('done');
+            } else {
+              logger.error(`❌ Submit step failed: ${submitResult.error_code}`);
+              return submitResult;
+            }
+          } else if (currentUrl.includes('/profile') || currentUrl.includes('/dashboard') || currentUrl.includes('/welcome')) {
+            logger.info('✅ Location step completed and redirected to completion page - automation successful');
+            return this.createSuccess('done');
           } else {
-            logger.warn(`Expected to be on location page, but current URL is: ${currentUrl}`);
-            return this.createError('LOCATION_PAGE_NOT_REACHED', `Expected location page but got: ${currentUrl}`);
+            logger.warn(`Location step completed but redirected to unexpected page: ${currentUrl} (detected step: ${detectedStep})`);
+            
+            // If we detected a valid step, try to run it
+            if (detectedStep !== 'unknown' && detectedStep !== 'initial') {
+              logger.info(`Attempting to run detected step: ${detectedStep}`);
+              const detectedStepResult = await this.executeStep(detectedStep, options);
+              if (detectedStepResult.status === 'success') {
+                logger.info(`✅ Successfully completed detected step: ${detectedStep}`);
+                return this.createSuccess('done');
+              } else {
+                logger.error(`❌ Detected step ${detectedStep} failed: ${detectedStepResult.error_code}`);
+                return detectedStepResult;
+              }
+            }
+            
+            return this.createError('LOCATION_PAGE_NOT_REACHED', `Location step completed but redirected to unexpected page: ${currentUrl}`);
           }
         }
         
@@ -709,8 +770,16 @@ export class LoginAutomation extends BaseAutomation {
             logger.info(`Current URL after redirect attempt: ${currentUrl}`);
             
             if (currentUrl.includes('/nx/create-profile/submit')) {
-              logger.info('✅ Successfully redirected to submit page');
-              return this.createSuccess('done');
+              logger.info('✅ Successfully redirected to submit page - running submit handler');
+              // Run the submit step handler
+              const submitResult = await this.executeStep('submit', options);
+              if (submitResult.status === 'success') {
+                logger.info('✅ Submit step completed successfully');
+                return this.createSuccess('done');
+              } else {
+                logger.error(`❌ Submit step failed: ${submitResult.error_code}`);
+                return submitResult;
+              }
             } else if (currentUrl.includes('/nx/create-profile/location')) {
               logger.error('❌ Redirect failed: still on location page, profile creation may be incomplete');
               return this.createError('SUBMIT_REDIRECT_FAILED', `Redirect to submit page failed - still on location page: ${currentUrl}`);
@@ -776,6 +845,22 @@ export class LoginAutomation extends BaseAutomation {
           const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'submit', 'general'];
     const index = steps.indexOf(stepName);
     return index === -1 ? 0 : index;
+  }
+
+  private async executeStep(stepName: string, options?: any): Promise<AutomationResult> {
+    logger.info(`Executing step: ${stepName}`);
+    
+    // Use step handler if available, otherwise use legacy method
+    if (this.stepHandlers.has(stepName)) {
+      logger.info(`Using step handler for: ${stepName}`);
+      const handler = this.stepHandlers.get(stepName);
+      // Pass options to step handler
+      return await handler.execute(options);
+    } else {
+      logger.warn(`No step handler found for: ${stepName}, using legacy handling`);
+      // Fallback to legacy step handling
+      return await this.handleLegacyStep(stepName);
+    }
   }
 
   private async handleLegacyStep(stepName: string): Promise<AutomationResult> {

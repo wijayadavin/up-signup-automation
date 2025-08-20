@@ -93,7 +93,14 @@ export class LocationStepHandler extends StepHandler {
         await this.clickElement(nextButton);
         logger.info('Next button clicked, waiting for phone verification modal...');
         
-      // Wait for phone verification modal to appear and handle OTP
+      // Check if user is from Ukraine - skip OTP verification for Ukraine
+      if (this.user.country_code.toUpperCase() === 'UA') {
+        logger.info('User is from Ukraine (UA) - skipping OTP verification and proceeding directly');
+        logger.info('Location step completed successfully for Ukraine user');
+        return this.createSuccess();
+      }
+      
+      // For other countries, handle phone verification modal and OTP
       const phoneVerificationResult = await this.handlePhoneVerificationModal(isSkipOtpMode);
       if (phoneVerificationResult.status !== 'success') {
         return phoneVerificationResult;
@@ -1341,6 +1348,13 @@ export class LocationStepHandler extends StepHandler {
 
   private async handlePhoneVerificationModal(skipOtp: boolean = false): Promise<AutomationResult> {
     try {
+      // Check if user is from Ukraine - skip OTP verification for Ukraine
+      if (this.user.country_code.toUpperCase() === 'UA') {
+        logger.info('User is from Ukraine (UA) - skipping phone verification modal detection');
+        logger.info('Location step completed successfully for Ukraine user');
+        return this.createSuccess();
+      }
+      
       logger.info('Waiting for phone verification modal with retries...');
       
       // Try up to 3 times to find the phone verification modal with longer delays
@@ -1496,6 +1510,13 @@ export class LocationStepHandler extends StepHandler {
 
   private async handleOTPInputWithResumability(skipOtp: boolean = false): Promise<AutomationResult> {
     try {
+      // Check if user is from Ukraine - skip OTP verification for Ukraine
+      if (this.user.country_code.toUpperCase() === 'UA') {
+        logger.info('User is from Ukraine (UA) - skipping OTP input handling');
+        logger.info('Location step completed successfully for Ukraine user');
+        return this.createSuccess();
+      }
+      
       // Check for the OTP input modal with multiple detection methods
       const otpModalTitle = await this.page.evaluate(() => {
         // Method 1: Check for h3 elements with "Enter your code"
