@@ -19,6 +19,121 @@ export class LocationStepHandler extends StepHandler {
     super(page, user, 'location');
   }
 
+  private async fillFieldWithVerification(fieldSelectors: string[], value: string, fieldName: string): Promise<AutomationResult> {
+    logger.info(`Filling ${fieldName} field with value: "${value}"`);
+    
+    // Use the common fillField method from FormAutomation
+    const result = await this.formAutomation.fillField(fieldSelectors, value, fieldName);
+    
+    if (result.status === 'success') {
+      logger.info(`✅ ${fieldName} field filled successfully`);
+    } else {
+      logger.warn(`⚠️ ${fieldName} field filling failed: ${result.evidence}`);
+    }
+    
+    return result;
+  }
+
+  private async handleAutocompleteSelection(fieldName: string): Promise<AutomationResult> {
+    logger.info(`Handling autocomplete selection for ${fieldName} field...`);
+    
+    try {
+      // Wait longer for autocomplete suggestions to appear
+      await this.randomDelay(3000, 4000);
+      
+      // Check if autocomplete dropdown appeared with better detection
+      const autocompleteInfo = await this.page.evaluate(() => {
+        // Look for various dropdown selectors
+        const dropdownSelectors = [
+          '.air3-typeahead-menu-list-container',
+          '.air3-typeahead-dropdown-menu',
+          '.air3-menu-list',
+          '[role="listbox"]',
+          '.dropdown-menu',
+          '.autocomplete-dropdown'
+        ];
+        
+        let visibleDropdown: Element | null = null;
+        let menuItems: Element[] = [];
+        
+        for (const selector of dropdownSelectors) {
+          const dropdowns = document.querySelectorAll(selector);
+          for (const dropdown of dropdowns) {
+            const style = window.getComputedStyle(dropdown);
+            if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+              visibleDropdown = dropdown;
+              // Look for menu items within this dropdown
+              const items = dropdown.querySelectorAll('[role="option"], .air3-menu-item, .dropdown-item, li');
+              menuItems = Array.from(items).filter(item => {
+                const itemStyle = window.getComputedStyle(item);
+                return itemStyle.display !== 'none' && itemStyle.visibility !== 'hidden';
+              });
+              break;
+            }
+          }
+          if (visibleDropdown && menuItems.length > 0) break;
+        }
+        
+        console.log(`Dropdown detection: visible=${!!visibleDropdown}, items=${menuItems.length}`);
+        return {
+          visible: !!visibleDropdown,
+          itemCount: menuItems.length,
+          firstItemText: menuItems[0]?.textContent?.trim() || 'N/A'
+        };
+      });
+      
+      logger.info(`${fieldName} dropdown detection: visible=${autocompleteInfo.visible}, items=${autocompleteInfo.itemCount}, first="${autocompleteInfo.firstItemText}"`);
+      
+      if (autocompleteInfo.visible && autocompleteInfo.itemCount > 0) {
+        logger.info(`${fieldName} autocomplete found with ${autocompleteInfo.itemCount} options, selecting first option`);
+        
+        // Improved selection sequence: pause, arrow down, pause, enter (doubled delays)
+        await this.randomDelay(2000, 3000); // Initial pause (doubled)
+        await this.page.keyboard.press('ArrowDown');
+        await this.randomDelay(2000, 3000); // Pause after arrow down (doubled)
+        await this.page.keyboard.press('Enter');
+        await this.randomDelay(4000, 6000); // Longer pause after enter (doubled)
+        
+        // Verify the selection worked
+        const selectionVerified = await this.page.evaluate(() => {
+          // Check if dropdown is now hidden
+          const dropdownSelectors = [
+            '.air3-typeahead-menu-list-container',
+            '.air3-typeahead-dropdown-menu',
+            '.air3-menu-list'
+          ];
+          
+          for (const selector of dropdownSelectors) {
+            const dropdowns = document.querySelectorAll(selector);
+            for (const dropdown of dropdowns) {
+              const style = window.getComputedStyle(dropdown);
+              if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+                return false; // Dropdown still visible
+              }
+            }
+          }
+          return true; // All dropdowns hidden
+        });
+        
+        if (selectionVerified) {
+          logger.info(`✅ ${fieldName} autocomplete selection completed successfully`);
+        } else {
+          logger.warn(`⚠️ ${fieldName} autocomplete selection may not have worked (dropdown still visible)`);
+        }
+        
+        return this.createSuccess();
+      } else {
+        logger.info(`No ${fieldName} autocomplete dropdown found, pressing Tab to continue`);
+        await this.page.keyboard.press('Tab');
+        await this.randomDelay(1000, 1500);
+        return this.createSuccess();
+      }
+    } catch (error) {
+      logger.warn(`Error in ${fieldName} autocomplete selection: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return this.createSuccess(); // Continue anyway
+    }
+  }
+
   async execute(options?: { skipOtp?: boolean }): Promise<AutomationResult> {
     try {
       logger.info(`Handling location step... (Skip-OTP mode: ${options?.skipOtp ? 'enabled' : 'disabled'})`);
@@ -93,18 +208,18 @@ export class LocationStepHandler extends StepHandler {
         await this.clickElement(nextButton);
         logger.info('Next button clicked, waiting for phone verification modal...');
         
-      // Check if user is from Ukraine - skip OTP verification for Ukraine
-      if (this.user.country_code.toUpperCase() === 'UA') {
-        logger.info('User is from Ukraine (UA) - skipping OTP verification and proceeding directly');
-        logger.info('Location step completed successfully for Ukraine user');
+      // Check if user is from Ukraine or Indonesia - skip OTP verification for these countries
+      if (this.user.country_code.toUpperCase() === 'UA' || this.user.country_code.toUpperCase() === 'ID') {
+        logger.info(`User is from ${this.user.country_code} - skipping OTP verification and proceeding directly`);
+        logger.info(`Location step completed successfully for ${this.user.country_code} user`);
         return this.createSuccess();
       }
       
       // For other countries, handle phone verification modal and OTP
-      const phoneVerificationResult = await this.handlePhoneVerificationModal(isSkipOtpMode);
-      if (phoneVerificationResult.status !== 'success') {
-        return phoneVerificationResult;
-      }
+        const phoneVerificationResult = await this.handlePhoneVerificationModal(isSkipOtpMode);
+        if (phoneVerificationResult.status !== 'success') {
+          return phoneVerificationResult;
+        }
         
         logger.info('Location step completed successfully with phone verification');
         return this.createSuccess();
@@ -139,9 +254,8 @@ export class LocationStepHandler extends StepHandler {
         switch (countryCode.toUpperCase()) {
           case 'GB': // United Kingdom
           case 'UA': // Ukraine
-            return 'yyyy-mm-dd';
           case 'ID': // Indonesia
-            return 'dd/mm/yyyy';
+            return 'yyyy-mm-dd';
           case 'US':
           default:
             return 'mm/dd/yyyy';
@@ -157,8 +271,6 @@ export class LocationStepHandler extends StepHandler {
         switch (format) {
           case 'yyyy-mm-dd':
             return `${year}-${month}-${day}`;
-          case 'dd/mm/yyyy':
-            return `${day}/${month}/${year}`;
           case 'mm/dd/yyyy':
           default:
             return `${month}/${day}/${year}`;
@@ -227,8 +339,6 @@ export class LocationStepHandler extends StepHandler {
         const format = getDateFormat(this.user.country_code);
         if (format === 'yyyy-mm-dd') {
           expectedYear = birthDate.split('-')[0];
-        } else if (format === 'dd/mm/yyyy') {
-          expectedYear = birthDate.split('/')[2];
         } else { // mm/dd/yyyy
           expectedYear = birthDate.split('/')[2];
         }
@@ -268,84 +378,42 @@ export class LocationStepHandler extends StepHandler {
         aptSuite: '' // Optional field
       };
 
-      // Fill street address with autocomplete handling
+      // Fill street address with simple, direct approach
+      logger.info(`Filling street address field with value: "${addressData.street}"`);
+      
       const streetField = await this.waitForSelectorWithRetry([
-        'input[placeholder="Enter street address"]',
-        '[data-qa="input-address"] input',
-        '.air3-typeahead-input-main[placeholder*="street"]',
-        '.air3-typeahead-input-fake[placeholder*="street"]',
+        'input[placeholder="Enter street address"]', 
+        '[data-qa="input-address"] input', 
+        '.air3-typeahead-input-main[placeholder*="street"]', 
+        '.air3-typeahead-input-fake[placeholder*="street"]', 
         'input[role="combobox"][placeholder*="street"]'
       ], 5000);
-
-      if (streetField) {
-        logger.info(`Filling street address: ${addressData.street}`);
+      
+      if (!streetField) {
+        logger.warn('Street address field not found, but continuing...');
+      } else {
+        // Focus and clear the field
+        await streetField.focus();
+        await this.randomDelay(500, 1000);
         
-        // Clear the field completely and type with verification
-        let attempts = 0;
-        let success = false;
-        const maxAttempts = 3;
+        // Clear completely
+        await streetField.evaluate((el: Element) => {
+          (el as HTMLInputElement).value = '';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await this.randomDelay(500, 1000);
         
-        while (attempts < maxAttempts && !success) {
-          attempts++;
-          logger.info(`Street address input attempt ${attempts}/${maxAttempts}`);
-          
-          // Clear the field completely
-          await streetField.click();
-          await streetField.evaluate((el: Element) => {
-            (el as HTMLInputElement).value = '';
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-          });
-          
-          await this.randomDelay(500, 1000);
-          
-          // Type the street address character by character
-          await streetField.type(addressData.street, { delay: 150 }); // Slower typing for accuracy
-          await this.randomDelay(2000, 3000);
-          
-          // Pause, press down, and enter for autocomplete
-          logger.info('Pausing and pressing down arrow for autocomplete...');
-          await this.randomDelay(1000, 1500);
-          await this.page.keyboard.press('ArrowDown');
-          await this.randomDelay(800, 1200);
-          await this.page.keyboard.press('Enter');
-          await this.randomDelay(1500, 2500);
-          
-          // Verify the input was typed correctly (after autocomplete selection)
-          await this.verifyAndRetryInput(streetField, addressData.street, 'Street Address');
-          
-          // Wait for autocomplete suggestions to appear
-          logger.info('Waiting for autocomplete suggestions...');
-          await this.randomDelay(1500, 2500);
-          
-          // Check if autocomplete dropdown is visible
-          const autocompleteVisible = await this.page.evaluate(() => {
-            const dropdown = document.querySelector('.air3-typeahead-menu-list-container:not([style*="display: none"])');
-            const menuItems = document.querySelectorAll('.air3-menu-list [role="option"]');
-            return dropdown && menuItems.length > 0;
-          });
-          
-          if (autocompleteVisible) {
-            logger.info('Autocomplete suggestions found, selecting first option');
-            // Press down arrow and enter for autocomplete
-            await this.page.keyboard.press('ArrowDown');
-            await this.randomDelay(800, 1200);
-            await this.page.keyboard.press('Enter');
-            await this.randomDelay(1500, 2500);
-            success = true;
-            logger.info('Street address autocomplete selection completed');
-          } else {
-            logger.info('No autocomplete suggestions, continuing with typed address');
-            // Press Tab to move to next field and trigger validation
-            await this.page.keyboard.press('Tab');
-            await this.randomDelay(1000, 1500);
-            success = true;
-          }
-        }
+        // Type the street address slowly
+        await streetField.type(addressData.street, { delay: 100 });
+        await this.randomDelay(1000, 2000);
         
-        if (!success) {
-          logger.error(`Failed to enter correct street address after ${maxAttempts} attempts`);
-          return this.createError('STREET_ADDRESS_INPUT_FAILED', `Failed to enter correct street address after ${maxAttempts} attempts`);
+        logger.info(`✅ Street address field typed: "${addressData.street}"`);
+        
+        // Handle autocomplete for street address using improved method
+        const autocompleteResult = await this.handleAutocompleteSelection('Street Address');
+        if (autocompleteResult.status !== 'success') {
+          logger.warn('Street address autocomplete selection failed, but continuing...');
         }
       }
 
@@ -360,65 +428,48 @@ export class LocationStepHandler extends StepHandler {
         await this.clearAndType(aptField, addressData.aptSuite);
       }
 
-      // Fill city with improved autocomplete handling (check if already filled)
+      // Fill city with simple, direct approach
+      logger.info(`Filling city field with value: "${addressData.city}"`);
+      
       const cityField = await this.waitForSelectorWithRetry([
-        'input[placeholder="Enter city"]',
-        '[data-qa="input-city"] input',
-        '[aria-labelledby*="city"] input',
-        '.air3-typeahead-input-fake[placeholder*="city"]'
+        'input[placeholder="Enter city"]', 
+        '[data-qa="input-city"] input', 
+        '[aria-labelledby*="city"] input', 
+        '.air3-typeahead-input-fake[placeholder*="city"]',
+        '.air3-typeahead-input-main[placeholder*="city"]'
       ], 5000);
-
-      if (cityField) {
-        // Check if city field already has a value (might be autofilled from street address)
+      
+      if (!cityField) {
+        logger.warn('City field not found, but continuing...');
+      } else {
+        // Check if city field is already filled
         const currentCityValue = await cityField.evaluate((el: Element) => (el as HTMLInputElement).value);
         
         if (currentCityValue && currentCityValue.trim() !== '') {
-          logger.info(`City field already filled with: ${currentCityValue}, skipping city input`);
+          logger.info(`City field already filled with: "${currentCityValue}", skipping city input`);
         } else {
-          logger.info(`Filling city: ${addressData.city}`);
-          
-          // Clear and focus the field
+          // Focus and clear the field
           await cityField.focus();
-          await this.randomDelay(300, 500);
-          await cityField.evaluate((el) => (el as HTMLInputElement).value = '');
+          await this.randomDelay(500, 1000);
           
-          // Type the city name with slower typing
-          await cityField.type(addressData.city, { delay: 150 });
-          await this.randomDelay(2000, 3000);
-          
-          // Pause, press down, and enter for autocomplete
-          logger.info('Pausing and pressing down arrow for city autocomplete...');
-          await this.randomDelay(1000, 1500);
-          await this.page.keyboard.press('ArrowDown');
-          await this.randomDelay(800, 1200);
-          await this.page.keyboard.press('Enter');
-          await this.randomDelay(1500, 2500);
-          
-          // Verify the city input was typed correctly (after autocomplete selection)
-          await this.verifyAndRetryInput(cityField, addressData.city, 'City');
-          
-          // Wait for autocomplete suggestions
-          logger.info('Waiting for city autocomplete suggestions...');
-          await this.randomDelay(1000, 1500);
-          
-          // Check if city autocomplete dropdown appeared
-          const cityAutocompleteVisible = await this.page.evaluate(() => {
-            const dropdowns = document.querySelectorAll('.air3-typeahead-menu-list-container:not([style*="display: none"])');
-            const menuItems = document.querySelectorAll('.air3-menu-list [role="option"]');
-            return dropdowns.length > 0 && menuItems.length > 0;
+          // Clear completely
+          await cityField.evaluate((el: Element) => {
+            (el as HTMLInputElement).value = '';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
           });
+          await this.randomDelay(500, 1000);
           
-          if (cityAutocompleteVisible) {
-            logger.info('City autocomplete found, selecting first option');
-            await this.page.keyboard.press('ArrowDown');
-            await this.randomDelay(800, 1200);
-            await this.page.keyboard.press('Enter');
-            await this.randomDelay(1500, 2500);
-            logger.info('City autocomplete selection completed');
-          } else {
-            logger.info('No city autocomplete, pressing Tab to continue');
-            await this.page.keyboard.press('Tab');
-            await this.randomDelay(1000, 1500);
+          // Type the city name slowly
+          await cityField.type(addressData.city, { delay: 100 });
+          await this.randomDelay(1000, 2000);
+          
+          logger.info(`✅ City field typed: "${addressData.city}"`);
+          
+          // Handle autocomplete for city field using improved method
+          const autocompleteResult = await this.handleAutocompleteSelection('City');
+          if (autocompleteResult.status !== 'success') {
+            logger.warn('City autocomplete selection failed, but continuing...');
           }
         }
       }
@@ -789,7 +840,7 @@ export class LocationStepHandler extends StepHandler {
 
     // Save avatar upload timestamp to database
     await this.saveAvatarUploadedAt();
-    
+
     logger.info('Profile photo upload completed successfully');
     
     return this.createSuccess();
@@ -1142,8 +1193,8 @@ export class LocationStepHandler extends StepHandler {
             } else {
               logger.warn(`❌ No order found in active or history for phone ${phoneNumber}`);
               return false;
-            }
-          } catch (error) {
+          }
+        } catch (error) {
             logger.warn(`Failed to check SMSPool orders: ${error instanceof Error ? error.message : 'Unknown error'}`);
             return false;
           }
@@ -1220,10 +1271,10 @@ export class LocationStepHandler extends StepHandler {
             const { SmsPoolService } = await import('../../services/smspoolService.js');
             const smsPoolService = new SmsPoolService();
             const otpCode = await smsPoolService.waitForOTP(this.user.id, this.user.country_code, 360); // 6 minutes timeout
-            if (otpCode) {
+      if (otpCode) {
               logger.info(`✅ Received existing OTP from SMSPool: ${otpCode}`);
               return otpCode;
-            } else {
+      } else {
               logger.warn('No OTP received from SMSPool within 3 minutes');
             }
           } catch (error) {
@@ -1263,7 +1314,7 @@ export class LocationStepHandler extends StepHandler {
             logger.error('Manual OTP timeout after 3 minutes');
             return null;
           }
-        } catch (error) {
+    } catch (error) {
           logger.error(`Failed to get manual OTP: ${error instanceof Error ? error.message : 'Unknown error'}`);
           return null;
         }
@@ -1348,10 +1399,10 @@ export class LocationStepHandler extends StepHandler {
 
   private async handlePhoneVerificationModal(skipOtp: boolean = false): Promise<AutomationResult> {
     try {
-      // Check if user is from Ukraine - skip OTP verification for Ukraine
-      if (this.user.country_code.toUpperCase() === 'UA') {
-        logger.info('User is from Ukraine (UA) - skipping phone verification modal detection');
-        logger.info('Location step completed successfully for Ukraine user');
+      // Check if user is from Ukraine or Indonesia - skip OTP verification for these countries
+      if (this.user.country_code.toUpperCase() === 'UA' || this.user.country_code.toUpperCase() === 'ID') {
+        logger.info(`User is from ${this.user.country_code} - skipping phone verification modal detection`);
+        logger.info(`Location step completed successfully for ${this.user.country_code} user`);
         return this.createSuccess();
       }
       
@@ -1388,7 +1439,7 @@ export class LocationStepHandler extends StepHandler {
         
         if (phoneVerificationModal) {
           logger.info(`✅ Phone verification modal found on attempt ${attempt}`);
-        } else {
+              } else {
           logger.info(`❌ Phone verification modal not found on attempt ${attempt}`);
         }
 
@@ -1471,31 +1522,31 @@ export class LocationStepHandler extends StepHandler {
       // Handle phone verification modal if found
       if (phoneVerificationModalFound) {
         logger.info('Phone verification modal found, proceeding with Send code button...');
-        
-        // Look for the "Send code" button
-        const sendCodeButton = await this.waitForSelectorWithRetry([
-          'button#submitPhone',
-          '[data-ev-label="submit_phone"]',
-          'button:contains("Send code")',
-          '.air3-btn-primary:contains("Send code")'
-        ], 5000);
 
-        if (!sendCodeButton) {
-          logger.warn('Send code button not found in phone verification modal');
-          return this.createError('SEND_CODE_BUTTON_NOT_FOUND', 'Could not find Send code button in phone verification modal');
-        }
+      // Look for the "Send code" button
+      const sendCodeButton = await this.waitForSelectorWithRetry([
+        'button#submitPhone',
+        '[data-ev-label="submit_phone"]',
+        'button:contains("Send code")',
+        '.air3-btn-primary:contains("Send code")'
+      ], 5000);
 
-        logger.info('Clicking Send code button...');
-        await this.clickElement(sendCodeButton);
-        
-        // Wait for the button to be processed
-        await this.randomDelay(2000, 3000);
-        
-        logger.info('Send code button clicked successfully');
-        
-        // Now wait for the OTP input modal to appear (10 seconds as requested)
-        logger.info('Waiting for OTP input modal to appear (10 seconds)...');
-        await this.randomDelay(10000, 10000);
+      if (!sendCodeButton) {
+        logger.warn('Send code button not found in phone verification modal');
+        return this.createError('SEND_CODE_BUTTON_NOT_FOUND', 'Could not find Send code button in phone verification modal');
+      }
+
+      logger.info('Clicking Send code button...');
+      await this.clickElement(sendCodeButton);
+      
+      // Wait for the button to be processed
+      await this.randomDelay(2000, 3000);
+      
+      logger.info('Send code button clicked successfully');
+      
+      // Now wait for the OTP input modal to appear (10 seconds as requested)
+      logger.info('Waiting for OTP input modal to appear (10 seconds)...');
+      await this.randomDelay(10000, 10000);
       } else {
         logger.info('OTP input modal already present, proceeding directly to OTP handling...');
       }
@@ -1510,10 +1561,10 @@ export class LocationStepHandler extends StepHandler {
 
   private async handleOTPInputWithResumability(skipOtp: boolean = false): Promise<AutomationResult> {
     try {
-      // Check if user is from Ukraine - skip OTP verification for Ukraine
-      if (this.user.country_code.toUpperCase() === 'UA') {
-        logger.info('User is from Ukraine (UA) - skipping OTP input handling');
-        logger.info('Location step completed successfully for Ukraine user');
+      // Check if user is from Ukraine or Indonesia - skip OTP verification for these countries
+      if (this.user.country_code.toUpperCase() === 'UA' || this.user.country_code.toUpperCase() === 'ID') {
+        logger.info(`User is from ${this.user.country_code} - skipping OTP input handling`);
+        logger.info(`Location step completed successfully for ${this.user.country_code} user`);
         return this.createSuccess();
       }
       
@@ -1575,7 +1626,7 @@ export class LocationStepHandler extends StepHandler {
         if (!alternativeDetection) {
           logger.error('OTP input modal not found with any detection method');
           return this.createError('OTP_MODAL_NOT_FOUND', 'OTP input modal not found with any detection method');
-        } else {
+          } else {
           logger.info('OTP input modal found with alternative detection method');
         }
       }
@@ -1804,8 +1855,8 @@ export class LocationStepHandler extends StepHandler {
             
             if (cleanActual !== cleanExpected) {
               errors.push(`Phone number verification failed - Expected: ${expectedData.phoneNumber} (${cleanExpected}), got: ${phoneValue} (${cleanActual})`);
-              allFieldsValid = false;
-            } else {
+          allFieldsValid = false;
+        } else {
               logger.info(`✅ Phone number verified: ${phoneValue} (digits: ${cleanActual})`);
             }
           }

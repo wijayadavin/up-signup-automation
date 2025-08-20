@@ -3,12 +3,25 @@ import { Generated } from 'kysely';
 export interface Database {
   users: UsersTable;
   migrations: MigrationsTable;
+  requests: RequestsTable;
 }
 
 export interface MigrationsTable {
   id: Generated<number>;
   name: string;
   executed_at: Date;
+}
+
+export interface RequestsTable {
+  id: Generated<number>;
+  user_id: number;
+  status: string;
+  attempt_count: number;
+  started_at: Generated<Date>;
+  completed_at: Date | null;
+  error_code: string | null;
+  error_message: string | null;
+  options: any | null; // JSONB field for storing command options
 }
 
 export interface UsersTable {
@@ -98,4 +111,33 @@ export interface UpdateUserCaptchaFlagInput {
 
 export interface UpdateUserUpCreatedAtInput {
   up_created_at: Date;
+}
+
+export interface Request {
+  id: number;
+  user_id: number;
+  status: string;
+  attempt_count: number;
+  started_at: Date;
+  completed_at: Date | null;
+  error_code: string | null;
+  error_message: string | null;
+  options: any | null;
+}
+
+export interface CreateRequestInput {
+  user_id: number;
+  status?: string;
+  attempt_count?: number;
+  error_code?: string;
+  error_message?: string;
+  options?: any;
+}
+
+export interface UpdateRequestInput {
+  status?: string;
+  attempt_count?: number;
+  completed_at?: Date;
+  error_code?: string;
+  error_message?: string;
 }

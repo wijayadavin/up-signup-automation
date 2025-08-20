@@ -36,18 +36,52 @@ export class FormAutomation extends BaseAutomation {
         await this.randomDelay(1000, 2000);
       }
       
+      // For autocomplete/typeahead fields, the value might not be visible while focused
+      // Try to blur the field first to make the value visible, then check it
+      await field.evaluate((el: Element) => (el as HTMLInputElement).blur());
+      await this.randomDelay(300, 500);
+      
       // Verify the value was entered correctly
       const enteredValue = await field.evaluate((el: Element) => (el as HTMLInputElement).value);
       
-      // More lenient verification: check if field has any value
+      // Check if field has any value
       if (enteredValue && enteredValue.trim() !== '') {
-        // For password fields, only log success, not the actual value
-        if (isPasswordField) {
-          logger.info(`${fieldName} filled successfully (length: ${enteredValue.length})`);
+        // For non-password fields, also verify the first letter was typed correctly
+        if (!isPasswordField && value && value.length > 0) {
+          const expectedFirstLetter = value.charAt(0).toLowerCase();
+          const actualFirstLetter = enteredValue.charAt(0).toLowerCase();
+          
+          if (actualFirstLetter === expectedFirstLetter) {
+            logger.info(`${fieldName} filled successfully: ${enteredValue} (first letter verified: ${actualFirstLetter})`);
+            return this.createSuccess();
+          } else {
+            logger.warn(`${fieldName} first letter verification failed. Expected: ${expectedFirstLetter}, Got: ${actualFirstLetter}. Full value: ${enteredValue}`);
+            
+            if (attempt < maxRetries) {
+              logger.info(`Retrying ${fieldName} entry due to first letter mismatch...`);
+              await this.randomDelay(1000, 2000);
+              continue;
+            }
+          }
         } else {
-          logger.info(`${fieldName} filled successfully: ${enteredValue}`);
+          // For password fields, only log success, not the actual value
+          if (isPasswordField) {
+            logger.info(`${fieldName} filled successfully (length: ${enteredValue.length})`);
+          } else {
+            logger.info(`${fieldName} filled successfully: ${enteredValue}`);
+          }
+          return this.createSuccess();
         }
-        return this.createSuccess();
+      } else {
+        // If still no value after blur, try clicking outside the field
+        await this.page.mouse.click(0, 0); // Click at top-left corner to deselect
+        await this.randomDelay(300, 500);
+        
+        const enteredValueAfterClick = await field.evaluate((el: Element) => (el as HTMLInputElement).value);
+        if (enteredValueAfterClick && enteredValueAfterClick.trim() !== '') {
+          logger.info(`${fieldName} filled successfully after deselect: ${enteredValueAfterClick}`);
+          return this.createSuccess();
+        }
       }
       
       logger.warn(`${fieldName} verification failed (attempt ${attempt}). Expected length: ${value.length}, Got length: ${enteredValue.length}`);

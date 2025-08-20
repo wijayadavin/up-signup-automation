@@ -24,6 +24,7 @@ export class ProxyTestService {
 
   async testProxyConnection(): Promise<ProxyTestResult> {
     let page: Page | null = null;
+    let tempBrowserManager: BrowserManager | null = null;
     
     try {
       // Check if proxy is enabled
@@ -43,8 +44,21 @@ export class ProxyTestService {
       const proxyMode = proxyInfo?.port === 10001 ? 'sticky (debug)' : 'rotating (production)';
       logger.info(`Testing proxy configuration - Host: ${proxyHost}, Port: ${proxyInfo?.port}, Mode: ${proxyMode}, Country: ${proxyInfo?.country}, Username: ${proxyInfo?.username}`);
 
-      // Create a new page for testing
-      page = await this.browserManager.newPage();
+      // Check if the existing browser manager is connected
+      const isConnected = await this.browserManager.isConnected();
+      
+      if (!isConnected) {
+        logger.info('Existing browser manager is not connected, creating new one for proxy test');
+        // Create a temporary browser manager for proxy testing
+        const { BrowserManager } = await import('../browser/browserManager.js');
+        tempBrowserManager = new BrowserManager({ 
+          headless: true // Always use headless for proxy tests
+        });
+        page = await tempBrowserManager.newPage();
+      } else {
+        // Use existing browser manager
+        page = await this.browserManager.newPage();
+      }
       logger.info('Testing proxy connection...');
 
       // Try multiple IP check services
@@ -171,10 +185,20 @@ export class ProxyTestService {
           // Page might already be closed
         }
       }
+      
+      // Clean up temporary browser manager if we created one
+      if (tempBrowserManager) {
+        try {
+          await tempBrowserManager.close();
+          logger.info('Temporary browser manager closed');
+        } catch (error) {
+          logger.warn('Failed to close temporary browser manager:', error);
+        }
+      }
     }
   }
 
-  async testProxyWithRetry(maxRetries: number = 3, retryDelay: number = 10000): Promise<ProxyTestResult> {
+  async testProxyWithRetry(maxRetries: number = 3, retryDelay: number = 15000): Promise<ProxyTestResult> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       logger.info(`Proxy test attempt ${attempt}/${maxRetries}`);
       

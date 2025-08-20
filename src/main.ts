@@ -575,21 +575,119 @@ const statsCmd = command({
       
       // Initialize services
       const userService = new UserService();
+      const { RequestService } = await import('./services/requestService.js');
+      const requestService = new RequestService();
       
       // Get stats
-      const stats = await userService.getStats();
+      const userStats = await userService.getStats();
+      const requestStats = await requestService.getRequestStats();
       
-      logger.info('Application Statistics:');
-      logger.info(`Total Users: ${stats.total}`);
-      logger.info(`Successful: ${stats.successful}`);
-      logger.info(`Pending: ${stats.pending}`);
-      logger.info(`Failed: ${stats.failed}`);
+      logger.info('=== Application Statistics ===');
+      logger.info(`Total Users: ${userStats.total}`);
+      logger.info(`Successful: ${userStats.successful}`);
+      logger.info(`Pending: ${userStats.pending}`);
+      logger.info(`Failed: ${userStats.failed}`);
+      logger.info(`Retryable (attempts < 5): ${userStats.retryable}`);
+      logger.info(`Exceeded Max Retries (>= 5): ${userStats.exceeded_max_retries}`);
+      
+      logger.info('\n=== Request Statistics ===');
+      logger.info(`Total Requests: ${requestStats.total_requests}`);
+      logger.info(`Running: ${requestStats.running_requests}`);
+      logger.info(`Waiting for Retry: ${requestStats.waiting_for_retry_requests}`);
+      logger.info(`Failed: ${requestStats.failed_requests}`);
+      logger.info(`Successful: ${requestStats.successful_requests}`);
+      logger.info(`Average Attempts: ${requestStats.average_attempts}`);
       
       // Cleanup
       await closeDatabase();
       
     } catch (error) {
       logger.error(error, 'Failed to get stats');
+      process.exit(1);
+    }
+  },
+});
+
+// Command to show requests history
+const requestsCmd = command({
+  name: 'requests',
+  description: 'Show requests history',
+  args: {
+    limit: option({
+      type: number,
+      long: 'limit',
+      short: 'l',
+      description: 'Number of recent requests to show',
+      defaultValue: () => 10,
+    }),
+    status: option({
+      type: string,
+      long: 'status',
+      short: 's',
+      description: 'Filter by status (RUNNING, WAITING_FOR_RETRY, FAILED, SUCCESS)',
+      defaultValue: () => '',
+    }),
+    userId: option({
+      type: string,
+      long: 'user-id',
+      short: 'u',
+      description: 'Filter by user ID',
+      defaultValue: () => '',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      // Run migrations
+      await runMigrations();
+      
+      // Initialize services
+      const { RequestService } = await import('./services/requestService.js');
+      const requestService = new RequestService();
+      
+      let requests;
+      if (args.userId) {
+        const userId = parseInt(args.userId, 10);
+        if (isNaN(userId)) {
+          logger.error('Invalid user ID');
+          process.exit(1);
+        }
+        requests = await requestService.getRequestsForUser(userId, args.limit);
+        logger.info(`=== Recent Requests for User ${userId} (last ${args.limit}) ===`);
+      } else if (args.status) {
+        requests = await requestService.getRequestsByStatus(args.status, args.limit);
+        logger.info(`=== Recent Requests with Status ${args.status} (last ${args.limit}) ===`);
+      } else {
+        requests = await requestService.getRequests(args.limit);
+        logger.info(`=== Recent Requests (last ${args.limit}) ===`);
+      }
+      
+      if (requests.length === 0) {
+        logger.info('No requests found');
+      } else {
+        for (const request of requests) {
+          const duration = request.completed_at 
+            ? Math.round((request.completed_at.getTime() - request.started_at.getTime()) / 1000)
+            : 'running';
+          
+          logger.info(`Request #${request.id} - User ${request.user_id} (${request.status})`);
+          logger.info(`  Started: ${request.started_at.toISOString()}`);
+          logger.info(`  Duration: ${duration}${typeof duration === 'number' ? 's' : ''}`);
+          logger.info(`  Attempts: ${request.attempt_count}/5`);
+          if (request.error_code) {
+            logger.info(`  Error Code: ${request.error_code}`);
+          }
+          if (request.error_message) {
+            logger.info(`  Error: ${request.error_message}`);
+          }
+          logger.info('');
+        }
+      }
+      
+      // Cleanup
+      await closeDatabase();
+      
+    } catch (error) {
+      logger.error(error, 'Failed to get requests');
       process.exit(1);
     }
   },
@@ -1578,7 +1676,7 @@ const testStepDetectionCmd = command({
       logger.info(`Step index: ${stepIndex}`);
       
       // Test step order
-      const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'submit', 'general'];
+      const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'general', 'location', 'submit'];
       logger.info(`Step order: ${steps.join(' -> ')}`);
       
       console.log(`✅ Step detection test completed:`);
@@ -1636,6 +1734,132 @@ const testPoolConfigCmd = command({
   }
 });
 
+// Retry specific user command
+const retryUserCmd = command({
+  name: 'retry-user',
+  description: 'Retry processing for a specific user ID',
+  args: {
+    userId: option({
+      type: number,
+      long: 'user-id',
+      short: 'u',
+      description: 'User ID to retry',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      logger.info(`Starting retry for user ID: ${args.userId}`);
+      
+      // Run migrations
+      await runMigrations();
+      
+      // Initialize services
+      const browserManager = new BrowserManager({ headless: true });
+      const userService = new UserService();
+      const upworkService = new UpworkService(browserManager, userService);
+      
+      // Import and use RetryService
+      const { RetryService } = await import('./services/retryService.js');
+      const retryService = new RetryService();
+      
+      // Retry the specific user
+      await retryService.retrySpecificUser(args.userId);
+      
+      // Get and display stats
+      const stats = await retryService.getRetryStats();
+      logger.info('Retry completed. Current stats:', stats);
+      
+    } catch (error) {
+      logger.error(error, 'Failed to retry user');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// Retry multiple users command
+const retryMultipleUsersCmd = command({
+  name: 'retry-multiple',
+  description: 'Retry processing for multiple specific user IDs',
+  args: {
+    userIds: option({
+      type: string,
+      long: 'user-ids',
+      short: 'u',
+      description: 'Comma-separated list of user IDs to retry (e.g., "10,15,20")',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      const userIds = args.userIds.split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
+      logger.info(`Starting retry for user IDs: [${userIds.join(', ')}]`);
+      
+      // Run migrations
+      await runMigrations();
+      
+      // Initialize services
+      const browserManager = new BrowserManager({ headless: true });
+      const userService = new UserService();
+      const upworkService = new UpworkService(browserManager, userService);
+      
+      // Import and use RetryService
+      const { RetryService } = await import('./services/retryService.js');
+      const retryService = new RetryService();
+      
+      // Retry the specific users
+      await retryService.retryMultipleUsers(userIds);
+      
+      // Get and display stats
+      const stats = await retryService.getRetryStats();
+      logger.info('Retry completed. Current stats:', stats);
+      
+    } catch (error) {
+      logger.error(error, 'Failed to retry users');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
+// Retry all failed users command
+const retryAllFailedCmd = command({
+  name: 'retry-all-failed',
+  description: 'Retry processing for all failed users',
+  args: {},
+  handler: async () => {
+    try {
+      logger.info('Starting retry for all failed users');
+      
+      // Run migrations
+      await runMigrations();
+      
+      // Initialize services
+      const browserManager = new BrowserManager({ headless: true });
+      const userService = new UserService();
+      const upworkService = new UpworkService(browserManager, userService);
+      
+      // Import and use RetryService
+      const { RetryService } = await import('./services/retryService.js');
+      const retryService = new RetryService();
+      
+      // Retry all failed users
+      await retryService.retryAllFailedUsers();
+      
+      // Get and display stats
+      const stats = await retryService.getRetryStats();
+      logger.info('Retry completed. Current stats:', stats);
+      
+    } catch (error) {
+      logger.error(error, 'Failed to retry all failed users');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  }
+});
+
 // Main command with subcommands
 const mainCmd = command({
   name: 'up-crawler',
@@ -1652,11 +1876,15 @@ const mainCmd = command({
     logger.info('  process-users --upload  - Test resume upload (Step 1-4 only)');
     logger.info('  process-users --step employment  - Force start from employment step');
     logger.info('  stats           - Show application statistics');
+    logger.info('  requests        - View requests history');
     logger.info('  test-proxy      - Test proxy configuration');
     logger.info('  restore-session - Restore session and open location page');
     logger.info('  wait-otp        - Wait for OTP from TextVerified.com API');
     logger.info('  test-textverified - Test TextVerified.com API and list services');
     logger.info('  check-sms        - Check SMS messages with status code');
+    logger.info('  retry-user       - Retry processing for a specific user ID');
+    logger.info('  retry-multiple   - Retry processing for multiple specific user IDs');
+    logger.info('  retry-all-failed - Retry processing for all failed users');
     logger.info('Use --help with any command for more information');
   },
 });
@@ -1690,6 +1918,9 @@ switch (commandName) {
     break;
   case 'stats':
     await run(statsCmd, commandArgs);
+    break;
+  case 'requests':
+    await run(requestsCmd, commandArgs);
     break;
   case 'test-proxy':
     await run(testProxyCmd, commandArgs);
@@ -1741,6 +1972,15 @@ switch (commandName) {
     break;
   case 'test-step-detection':
     await run(testStepDetectionCmd, commandArgs);
+    break;
+  case 'retry-user':
+    await run(retryUserCmd, commandArgs);
+    break;
+  case 'retry-multiple':
+    await run(retryMultipleUsersCmd, commandArgs);
+    break;
+  case 'retry-all-failed':
+    await run(retryAllFailedCmd, commandArgs);
     break;
   default:
     await run(mainCmd, process.argv.slice(2));

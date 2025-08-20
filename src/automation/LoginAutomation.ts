@@ -329,46 +329,460 @@ export class LoginAutomation extends BaseAutomation {
     ], this.user.email, 'email');
   }
 
+  private async clickContinueButton(): Promise<AutomationResult> {
+    logger.info('Looking for Continue button to submit email...');
+    
+    // Wait for the button to be properly rendered
+    await this.randomDelay(1000, 2000);
+    
+    // Check if the specific button is present and clickable
+    const continueButton = await this.page.evaluate(() => {
+      const buttonSelectors = [
+        'button[id="login_password_continue"]',
+        'button[data-ev-label="Continue"]',
+        'button[button-role="continue"]',
+        'button[type="submit"]',
+        'button:contains("Continue")',
+        '.air3-btn-primary',
+        '[data-qa="login_username_continue"]',
+        'button[data-ev-label="login_username_continue"]'
+      ];
+      
+      for (const selector of buttonSelectors) {
+        const button = document.querySelector(selector);
+        if (button) {
+          const rect = button.getBoundingClientRect();
+          const isVisible = rect.width > 0 && rect.height > 0;
+          const isEnabled = !button.hasAttribute('disabled');
+          const isClickable = (button as HTMLElement).offsetParent !== null;
+          
+          console.log(`Button found with selector: ${selector}`);
+          console.log(`- Visible: ${isVisible}, Enabled: ${isEnabled}, Clickable: ${isClickable}`);
+          console.log(`- Button text: ${button.textContent?.trim()}`);
+          console.log(`- Button classes: ${button.className}`);
+          
+          if (isVisible && isEnabled && isClickable) {
+            return {
+              selector,
+              text: button.textContent?.trim(),
+              className: button.className,
+              isClickable: true
+            };
+          }
+        }
+      }
+      
+      return null;
+    });
+    
+    if (continueButton && continueButton.isClickable) {
+      logger.info(`✅ Found clickable Continue button: "${continueButton.text}" (${continueButton.selector})`);
+      
+      // Store current URL to check for changes
+      const currentUrl = this.page.url();
+      logger.info(`Current URL before click: ${currentUrl}`);
+      
+      // Try to click the button using the specific selector
+      try {
+        const buttonElement = await this.page.$(continueButton.selector);
+        if (buttonElement) {
+          // Wait for button to be ready
+          await this.randomDelay(500, 1000);
+          
+          // Try multiple click methods with human-like behavior
+          try {
+            // Get button bounds for random positioning
+            const buttonBounds = await buttonElement.boundingBox();
+            if (buttonBounds) {
+              // Calculate random position within button bounds (avoiding edges)
+              const padding = 5; // Avoid clicking too close to edges
+              const randomX = buttonBounds.x + padding + Math.random() * (buttonBounds.width - 2 * padding);
+              const randomY = buttonBounds.y + padding + Math.random() * (buttonBounds.height - 2 * padding);
+              
+              logger.info(`Clicking at random position: (${Math.round(randomX)}, ${Math.round(randomY)}) within button bounds`);
+              
+              // Move mouse to random position first (human-like)
+              const currentMousePosition = await this.page.evaluate(() => ({ x: 0, y: 0 })); // We'll get this from page
+              
+              // Add some natural variation to the movement path
+              const steps = 10 + Math.floor(Math.random() * 5); // 10-15 steps for natural movement
+              await this.page.mouse.move(randomX, randomY, { steps }); // Smooth movement
+              
+              // Add a small random pause like humans do before clicking
+              await this.randomDelay(100, 400); // Brief pause like human
+              
+              // Click at random position with human-like timing
+              await this.page.mouse.down();
+              await this.randomDelay(50, 150); // Brief hold like human
+              await this.page.mouse.up();
+              logger.info('✅ Continue button clicked successfully at random position with human-like timing');
+            } else {
+              // Fallback to regular click if bounds not available
+              await buttonElement.click();
+              logger.info('✅ Continue button clicked successfully (fallback)');
+            }
+          } catch (clickError) {
+            logger.warn(`Direct click failed: ${clickError}, trying alternative methods...`);
+            
+            // Try clicking with JavaScript at random position
+            await this.page.evaluate((selector) => {
+              const button = document.querySelector(selector);
+              if (button) {
+                const rect = button.getBoundingClientRect();
+                const padding = 5;
+                const randomX = rect.x + padding + Math.random() * (rect.width - 2 * padding);
+                const randomY = rect.y + padding + Math.random() * (rect.height - 2 * padding);
+                
+                // Create and dispatch mouse events at random position
+                const mouseDown = new MouseEvent('mousedown', {
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: randomX,
+                  clientY: randomY
+                });
+                const mouseUp = new MouseEvent('mouseup', {
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: randomX,
+                  clientY: randomY
+                });
+                const click = new MouseEvent('click', {
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: randomX,
+                  clientY: randomY
+                });
+                
+                button.dispatchEvent(mouseDown);
+                button.dispatchEvent(mouseUp);
+                button.dispatchEvent(click);
+              }
+            }, continueButton.selector);
+            
+            logger.info('✅ Continue button clicked via JavaScript at random position');
+          }
+          
+          // Wait longer for the button click to process
+          logger.info('Waiting for Continue button to process...');
+          await this.randomDelay(2000, 3000);
+          
+          // Check if URL changed
+          const newUrl = this.page.url();
+          logger.info(`URL after click: ${newUrl}`);
+          
+          if (newUrl !== currentUrl) {
+            logger.info('✅ URL changed, indicating successful navigation');
+          } else {
+            logger.info('URL unchanged, checking for other indicators...');
+          }
+          
+          // Additional verification: Check if the email field is no longer visible
+          const emailFieldGone = await this.page.evaluate(() => {
+            const emailField = document.querySelector('#login_username, input[name="login[username]"]');
+            return !emailField || (emailField as HTMLElement).offsetParent === null;
+          });
+          
+          if (emailFieldGone) {
+            logger.info('✅ Email field no longer visible, indicating successful transition');
+          } else {
+            logger.warn('⚠️ Email field still visible, Continue button may not have worked');
+            
+            // Try form submission as fallback
+            logger.info('Trying form submission as fallback...');
+            try {
+              await this.page.evaluate(() => {
+                const form = document.querySelector('form');
+                if (form) {
+                  // Trigger form validation first
+                  const submitEvent = new Event('submit', { bubbles: true, cancelable: true });
+                  form.dispatchEvent(submitEvent);
+                  
+                  // If event wasn't cancelled, submit the form
+                  if (!submitEvent.defaultPrevented) {
+                    (form as HTMLFormElement).submit();
+                  }
+                }
+              });
+              logger.info('✅ Form submitted as fallback');
+              await this.randomDelay(2000, 3000);
+            } catch (submitError) {
+              logger.warn(`Form submission fallback failed: ${submitError}`);
+            }
+          }
+          
+          return this.createSuccess();
+        } else {
+          logger.warn('Button element not found, trying JavaScript click...');
+          // Try clicking with JavaScript as fallback at random position
+          await this.page.evaluate((selector) => {
+            const button = document.querySelector(selector);
+            if (button) {
+              const rect = button.getBoundingClientRect();
+              const padding = 5;
+              const randomX = rect.x + padding + Math.random() * (rect.width - 2 * padding);
+              const randomY = rect.y + padding + Math.random() * (rect.height - 2 * padding);
+              
+              // Create and dispatch mouse events at random position
+              const mouseDown = new MouseEvent('mousedown', {
+                bubbles: true,
+                cancelable: true,
+                clientX: randomX,
+                clientY: randomY
+              });
+              const mouseUp = new MouseEvent('mouseup', {
+                bubbles: true,
+                cancelable: true,
+                clientX: randomX,
+                clientY: randomY
+              });
+              const click = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                clientX: randomX,
+                clientY: randomY
+              });
+              
+              button.dispatchEvent(mouseDown);
+              button.dispatchEvent(mouseUp);
+              button.dispatchEvent(click);
+            }
+          }, continueButton.selector);
+          
+          logger.info('✅ Continue button clicked via JavaScript fallback');
+          await this.randomDelay(2000, 3000);
+          
+          // Check if URL changed
+          const newUrl = this.page.url();
+          logger.info(`URL after JavaScript click: ${newUrl}`);
+          
+          // Additional verification: Check if the email field is no longer visible
+          const emailFieldGone = await this.page.evaluate(() => {
+            const emailField = document.querySelector('#login_username, input[name="login[username]"]');
+            return !emailField || (emailField as HTMLElement).offsetParent === null;
+          });
+          
+          if (emailFieldGone) {
+            logger.info('✅ Email field no longer visible after JavaScript click');
+          } else {
+            logger.warn('⚠️ Email field still visible after JavaScript click, trying form submission...');
+            try {
+              await this.page.evaluate(() => {
+                const form = document.querySelector('form');
+                if (form) {
+                  (form as HTMLFormElement).submit();
+                }
+              });
+              logger.info('✅ Form submitted as fallback after JavaScript click');
+              await this.randomDelay(2000, 3000);
+            } catch (submitError) {
+              logger.warn(`Form submission fallback failed: ${submitError}`);
+            }
+          }
+          
+          return this.createSuccess();
+        }
+      } catch (error) {
+        logger.error(`Failed to click Continue button: ${error}`);
+        return this.createError('CONTINUE_BUTTON_CLICK_FAILED', `Failed to click Continue button: ${error}`);
+      }
+    } else {
+      logger.warn('❌ No clickable Continue button found, pressing Enter as fallback...');
+      await this.page.keyboard.press('Enter');
+      await this.randomDelay(1000, 2000);
+      return this.createSuccess();
+    }
+  }
+
   private async enterPassword(): Promise<AutomationResult> {
     logger.info('Entering password...');
     
-    // Press Enter to submit email form
-    await this.page.keyboard.press('Enter');
+    // Click the Continue button first
+    const continueResult = await this.clickContinueButton();
+    if (continueResult.status !== 'success') {
+      return continueResult;
+    }
     
     // Wait for page transition after email submission
     logger.info('Waiting for page transition after email submission...');
     await this.waitForPageTransition();
     
+    // Additional wait for the password field to appear
+    logger.info('Waiting for password field to appear...');
+    await this.randomDelay(3000, 5000);
+    
     // Wait for the page to be ready and network to be idle
     await this.waitForPageReady();
     
-    // Check if we're in the correct password state by looking for the "Welcome" message with email
-    logger.info('Checking for password state (Welcome message with email)...');
+    // Check if we're still on the email input page (redirected back)
+    const isStillOnEmailPage = await this.page.evaluate(() => {
+      const emailField = document.querySelector('#login_username, input[name="login[username]"]');
+      const continueButton = document.querySelector('button[id="login_password_continue"]');
+      return emailField && (emailField as HTMLElement).offsetParent !== null && 
+             continueButton && (continueButton as HTMLElement).offsetParent !== null;
+    });
     
-    // Function to check password state
+    if (isStillOnEmailPage) {
+      logger.warn('⚠️ Still on email input page after Continue button click - likely redirected back');
+      logger.info('Retrying email input and Continue button click...');
+      
+      // Check if there are any validation errors
+      const hasValidationErrors = await this.page.evaluate(() => {
+        const errorElements = document.querySelectorAll('.error, .alert, .alert-danger, [role="alert"]');
+        return errorElements.length > 0;
+      });
+      
+      if (hasValidationErrors) {
+        logger.warn('⚠️ Validation errors detected, clearing and re-entering email...');
+        
+        // Clear the email field and re-enter
+        await this.page.evaluate(() => {
+          const emailField = document.querySelector('#login_username, input[name="login[username]"]') as HTMLInputElement;
+          if (emailField) {
+            emailField.value = '';
+            emailField.focus();
+          }
+        });
+        
+        await this.randomDelay(1000, 2000);
+      }
+      
+      // Retry the entire email entry process
+      const emailRetryResult = await this.enterEmail();
+      if (emailRetryResult.status !== 'success') {
+        return emailRetryResult;
+      }
+      
+      // Try clicking Continue again with a different approach
+      logger.info('Trying alternative Continue button click methods...');
+      
+      // Method 1: Try pressing Enter key
+      try {
+        await this.page.keyboard.press('Enter');
+        logger.info('✅ Pressed Enter key as alternative');
+        await this.randomDelay(2000, 3000);
+      } catch (enterError) {
+        logger.warn(`Enter key failed: ${enterError}`);
+      }
+      
+      // Method 2: Try clicking with different selector at random position
+      try {
+        const clicked = await this.page.evaluate(() => {
+          const buttons = document.querySelectorAll('button');
+          for (const button of buttons) {
+            const text = button.textContent?.trim().toLowerCase();
+            if (text === 'continue' || text === 'next' || text === 'submit') {
+              const rect = button.getBoundingClientRect();
+              const padding = 5;
+              const randomX = rect.x + padding + Math.random() * (rect.width - 2 * padding);
+              const randomY = rect.y + padding + Math.random() * (rect.height - 2 * padding);
+              
+              // Create and dispatch mouse events at random position
+              const mouseDown = new MouseEvent('mousedown', {
+                bubbles: true,
+                cancelable: true,
+                clientX: randomX,
+                clientY: randomY
+              });
+              const mouseUp = new MouseEvent('mouseup', {
+                bubbles: true,
+                cancelable: true,
+                clientX: randomX,
+                clientY: randomY
+              });
+              const click = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                clientX: randomX,
+                clientY: randomY
+              });
+              
+              button.dispatchEvent(mouseDown);
+              button.dispatchEvent(mouseUp);
+              button.dispatchEvent(click);
+              return true;
+            }
+          }
+          return false;
+        });
+        
+        if (clicked) {
+          logger.info('✅ Clicked Continue button with alternative method at random position');
+        } else {
+          logger.warn('No suitable button found for alternative click');
+        }
+        await this.randomDelay(2000, 3000);
+      } catch (altClickError) {
+        logger.warn(`Alternative click failed: ${altClickError}`);
+      }
+      
+      // Wait again for page transition
+      logger.info('Waiting for page transition after retry...');
+      await this.waitForPageTransition();
+      await this.randomDelay(3000, 5000);
+      await this.waitForPageReady();
+    }
+    
+    // Check if password field is already visible
+    const passwordFieldVisible = await this.page.evaluate(() => {
+      const passwordSelectors = [
+        '#login_password',
+        '[aria-label*="Password"]',
+        'input[name="login[password]"]',
+        'input[type="password"]'
+      ];
+      return passwordSelectors.some(selector => {
+        const element = document.querySelector(selector);
+        return element && (element as HTMLElement).offsetParent !== null; // Check if element is visible
+      });
+    });
+    
+    if (passwordFieldVisible) {
+      logger.info('✅ Password field is already visible, proceeding with password entry');
+    } else {
+      logger.info('Password field not yet visible, continuing with state check...');
+    }
+    
+    // Check if we're in the correct password state by looking for multiple indicators
+    logger.info('Checking for password state indicators...');
+    
+    // Function to check password state with multiple indicators
     const checkPasswordState = async (userEmail: string) => {
       return await this.page.evaluate((email) => {
-        // Look for the Welcome message
+        // Indicator 1: Look for the Welcome message
         const welcomeElement = document.querySelector('h1.text-center.h3.mb-md-6x.d-none.d-md-block');
-        if (!welcomeElement) {
-          return false;
-        }
+        const hasWelcomeMessage = welcomeElement && welcomeElement.textContent?.trim().includes('Welcome');
         
-        // Check if it contains "Welcome"
-        const welcomeText = welcomeElement.textContent?.trim();
-        if (!welcomeText || !welcomeText.includes('Welcome')) {
-          return false;
-        }
-        
-        // Look for the email display
+        // Indicator 2: Look for the email display
         const emailElement = document.querySelector('div.small.mt-2x.mb-3x.pb-2x.ellipsis.font-weight-body');
-        if (!emailElement) {
-          return false;
-        }
+        const hasEmailDisplay = emailElement && emailElement.textContent?.trim() === email;
         
-        // Check if the displayed email matches the user's email
-        const displayedEmail = emailElement.textContent?.trim();
-        return displayedEmail === email;
+        // Indicator 3: Look for password field directly
+        const passwordField = document.querySelector('#login_password, [aria-label*="Password"], input[name="login[password]"], input[type="password"]');
+        const hasPasswordField = passwordField && (passwordField as HTMLElement).offsetParent !== null;
+        
+        // Indicator 4: Check if we're no longer on the email input page
+        const emailField = document.querySelector('#login_username, input[name="login[username]"]');
+        const isEmailFieldGone = !emailField || (emailField as HTMLElement).offsetParent === null;
+        
+        // Indicator 5: Check for password-related text on page
+        const pageText = document.body.textContent || '';
+        const hasPasswordText = pageText.includes('Password') || pageText.includes('password');
+        
+        console.log('Password state indicators:');
+        console.log('- Welcome message:', hasWelcomeMessage);
+        console.log('- Email display:', hasEmailDisplay);
+        console.log('- Password field visible:', hasPasswordField);
+        console.log('- Email field gone:', isEmailFieldGone);
+        console.log('- Password text on page:', hasPasswordText);
+        
+        // Return true if we have multiple positive indicators
+        const positiveIndicators = [hasWelcomeMessage, hasEmailDisplay, hasPasswordField, isEmailFieldGone, hasPasswordText];
+        const positiveCount = positiveIndicators.filter(Boolean).length;
+        
+        console.log(`Positive indicators: ${positiveCount}/5`);
+        
+        // Consider it a password state if we have at least 3 positive indicators
+        return positiveCount >= 3;
       }, userEmail);
     };
     
@@ -607,7 +1021,7 @@ export class LoginAutomation extends BaseAutomation {
         return this.createSuccess('done');
       }
 
-      const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'submit', 'general'];
+      const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'general', 'location', 'submit'];
       let currentStepIndex = this.getStepIndex(currentStep);
       
       // Execute remaining steps in order
@@ -667,6 +1081,53 @@ export class LoginAutomation extends BaseAutomation {
         // Check if step failed
         if (stepResult.status !== 'success') {
           return stepResult;
+        }
+        
+        // Check if the step handler detected a redirect to a later step
+        // If so, we should skip the remaining steps and handle the redirect properly
+        const currentUrlAfterStep = this.page.url();
+        const detectedStepAfter = this.detectProfileStep(currentUrlAfterStep);
+        
+        // If we're now on a step that comes after the current step in the sequence, 
+        // it means we were redirected and should handle it appropriately
+        if (detectedStepAfter !== stepName && detectedStepAfter !== 'initial' && detectedStepAfter !== 'unknown') {
+          const currentStepIndex = this.getStepIndex(stepName);
+          const detectedStepIndex = this.getStepIndex(detectedStepAfter);
+          
+          if (detectedStepIndex > currentStepIndex) {
+            logger.info(`Step ${stepName} redirected to later step ${detectedStepAfter}, handling redirect...`);
+            
+            // If we're redirected to location step, run the location handler
+            if (detectedStepAfter === 'location') {
+              logger.info('✅ Redirected to location step, running location handler...');
+              const locationResult = await this.executeStep('location', options);
+              if (locationResult.status === 'success') {
+                logger.info('✅ Location step completed successfully');
+                return this.createSuccess('done');
+              } else {
+                logger.error(`❌ Location step failed: ${locationResult.error_code}`);
+                return locationResult;
+              }
+            }
+            
+            // If we're redirected to submit step, handle it specially
+            if (detectedStepAfter === 'submit') {
+              logger.info('✅ Redirected to submit step, running submit handler...');
+              const submitResult = await this.executeStep('submit', options);
+              if (submitResult.status === 'success') {
+                logger.info('✅ Submit step completed successfully');
+                return this.createSuccess('done');
+              } else {
+                logger.error(`❌ Submit step failed: ${submitResult.error_code}`);
+                return submitResult;
+              }
+            }
+            
+            // For other redirects, realign to the detected step
+            logger.info(`Realigning to detected step ${detectedStepAfter} after redirect from ${stepName}`);
+            i = detectedStepIndex - 1; // -1 because for-loop will ++i
+            continue;
+          }
         }
         
         // Special handling for location step completion
@@ -842,7 +1303,7 @@ export class LoginAutomation extends BaseAutomation {
   }
 
   private getStepIndex(stepName: string): number {
-          const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'location', 'submit', 'general'];
+    const steps = ['welcome', 'experience', 'goal', 'work_preference', 'resume_import', 'categories', 'skills', 'title', 'employment', 'education', 'languages', 'overview', 'rate', 'general', 'location', 'submit'];
     const index = steps.indexOf(stepName);
     return index === -1 ? 0 : index;
   }

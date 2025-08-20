@@ -1,5 +1,6 @@
 import { BrowserManager } from '../browser/browserManager.js';
 import { UserService } from './userService.js';
+import { RequestService } from './requestService.js';
 import { getLogger } from '../utils/logger.js';
 import { LoginAutomation as AutomationLoginAutomation, type LoginResult } from '../automation/LoginAutomation.js';
 import { ProxyTestService } from './proxyTestService.js';
@@ -18,6 +19,7 @@ export interface UpworkConfig {
 export class UpworkService {
   private browserManager: BrowserManager;
   private userService: UserService;
+  private requestService: RequestService;
   private config: UpworkConfig;
   private proxyTestService: ProxyTestService;
 
@@ -28,6 +30,7 @@ export class UpworkService {
   ) {
     this.browserManager = browserManager;
     this.userService = userService;
+    this.requestService = new RequestService();
     this.proxyTestService = new ProxyTestService(browserManager);
     this.config = {
       loginUrl: config.loginUrl ?? 'https://www.upwork.com/ab/account-security/login',
@@ -439,7 +442,38 @@ export class UpworkService {
   }
 
   async processPendingUsers(limit: number = 5, options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string; retry?: boolean; userId?: number }): Promise<void> {
+    const activeRequests: any[] = [];
+    let isShuttingDown = false;
+    
+    // Set up graceful shutdown handler
+    const gracefulShutdown = async (signal: string) => {
+      logger.info(`Received ${signal}, starting graceful shutdown...`);
+      isShuttingDown = true;
+      
+      // Mark all active requests as canceled
+      for (const request of activeRequests) {
+        try {
+          await this.requestService.updateRequest(request.id, {
+            status: 'CANCELED',
+            completed_at: new Date(),
+            error_message: `Process terminated by ${signal}`
+          });
+          logger.info(`Marked request ${request.id} for user ${request.user_id} as CANCELED`);
+        } catch (error) {
+          logger.error(`Failed to mark request ${request.id} as canceled:`, error);
+        }
+      }
+      
+      logger.info(`Graceful shutdown completed. ${activeRequests.length} requests marked as canceled.`);
+      process.exit(0);
+    };
+    
+    // Register signal handlers
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    
     try {
+
       // First, process normal pending users (excluding captcha-flagged)
       let normalUsers: User[];
       
@@ -487,16 +521,64 @@ export class UpworkService {
         }, 'Processing users in descending ID order (highest first)');
         
         for (const user of sortedNormalUsers) {
-          const result = await this.processUser(user, options);
+          // Check if we're shutting down
+          if (isShuttingDown) {
+            logger.info('Shutdown detected, stopping user processing');
+            break;
+          }
           
-          if (!result.success) {
-            // Update user with error information
-            await this.userService.updateUserAttempt(user.id, {
-              last_attempt_at: new Date(),
-              attempt_count: user.attempt_count + 1,
-              last_error_code: result.errorCode,
-              last_error_message: result.errorMessage,
+          // Create a request for this user
+          const request = await this.requestService.createRequest({
+            user_id: user.id,
+            status: 'RUNNING',
+            attempt_count: user.attempt_count + 1,
+            options: options || {}
+          });
+          
+          // Add to active requests for graceful shutdown
+          activeRequests.push(request);
+          
+          try {
+            const result = await this.processUser(user, options);
+            
+            if (!result.success) {
+              // Update request with error information
+              await this.requestService.updateRequest(request.id, {
+                status: 'WAITING_FOR_RETRY',
+                completed_at: new Date(),
+                error_code: result.errorCode,
+                error_message: result.errorMessage
+              });
+              
+              // Update user with error information
+              await this.userService.updateUserAttempt(user.id, {
+                last_attempt_at: new Date(),
+                attempt_count: user.attempt_count + 1,
+                last_error_code: result.errorCode,
+                last_error_message: result.errorMessage,
+              });
+            } else {
+              // Update request as successful
+              await this.requestService.updateRequest(request.id, {
+                status: 'SUCCESS',
+                completed_at: new Date()
+              });
+            }
+          } catch (error) {
+            // Update request with error
+            await this.requestService.updateRequest(request.id, {
+              status: 'FAILED',
+              completed_at: new Date(),
+              error_message: error instanceof Error ? error.message : 'Unknown error'
             });
+            
+            logger.error(`Error processing user ${user.id}:`, error);
+          } finally {
+            // Remove from active requests
+            const index = activeRequests.findIndex(r => r.id === request.id);
+            if (index > -1) {
+              activeRequests.splice(index, 1);
+            }
           }
 
           // Add delay between users to avoid rate limiting
@@ -510,40 +592,27 @@ export class UpworkService {
 
       // If retry mode is enabled, process failed users after normal users
       if (options?.retry) {
-        logger.info('🔄 Retry mode enabled - will keep trying until all users succeed');
+        logger.info('🔄 Retry mode enabled - will process users that need retry (attempts < 5)');
         
-        let retryRound = 1;
-        let totalProcessed = 0;
-        let totalSuccessful = 0;
+        // Get users that need retry (failed users with less than 5 attempts)
+        // Only retry users from the current batch, not all users in database
+        const allRetryableUsers = await this.userService.getUsersForRetry(limit);
         
-        while (true) {
-          // Get both captcha-flagged users and other failed users
-          const captchaUsers = await this.userService.getCaptchaFlaggedUsers(limit);
-          const failedUsers = await this.userService.getFailedUsers(limit);
-          
-          const totalRetryUsers = captchaUsers.length + failedUsers.length;
-          
-          if (totalRetryUsers === 0) {
-            logger.info({ 
-              retryRound, 
-              totalProcessed, 
-              totalSuccessful 
-            }, '🎉 All users have been processed successfully! Retry complete.');
-            break;
-          }
-          
-          logger.info({ 
-            retryRound,
-            captchaCount: captchaUsers.length, 
-            failedCount: failedUsers.length,
-            totalCount: totalRetryUsers,
-            totalProcessed,
-            totalSuccessful
-          }, `🔄 Retry round ${retryRound} - Processing ${totalRetryUsers} failed users`);
+        // Filter to only include users that were part of the initial batch
+        const retryableUsers = allRetryableUsers.filter(user => 
+          normalUsers.some(normalUser => normalUser.id === user.id)
+        );
+        
+        logger.info(`📋 Found ${allRetryableUsers.length} total retryable users, but only retrying ${retryableUsers.length} from current batch`);
+        
+        if (retryableUsers.length === 0) {
+          logger.info('✅ No users need retry (all users either succeeded or exceeded max attempts)');
+        } else {
+          logger.info(`📋 Found ${retryableUsers.length} users that need retry (attempts < 5)`);
           
           // Test proxy connection before processing retry users
           logger.info('Testing proxy connection before retry processing...');
-          const proxyTestResult = await this.proxyTestService.testProxyWithRetry(3, 10000);
+          const proxyTestResult = await this.proxyTestService.testProxyWithRetry(3, 15000);
           
           if (!proxyTestResult.success) {
             logger.error({ error: proxyTestResult.error }, 'Proxy test failed, skipping retry processing');
@@ -571,97 +640,267 @@ export class UpworkService {
             }
           }
 
-          let roundSuccessful = 0;
-          let roundProcessed = 0;
+          let retrySuccessful = 0;
+          let retryFailed = 0;
 
-          // Process captcha-flagged users first (sorted by ID descending)
-          const sortedCaptchaUsers = captchaUsers.sort((a, b) => b.id - a.id);
-          logger.info({ 
-            captchaUserIds: sortedCaptchaUsers.map(u => u.id),
-            count: sortedCaptchaUsers.length 
-          }, 'Processing captcha users in descending ID order (highest first)');
+          // Process retryable users (sorted by attempts descending, then by oldest attempt)
+          const sortedRetryUsers = retryableUsers.sort((a, b) => {
+            if (b.attempt_count !== a.attempt_count) {
+              return b.attempt_count - a.attempt_count; // Most attempts first
+            }
+            return (a.last_attempt_at?.getTime() || 0) - (b.last_attempt_at?.getTime() || 0); // Oldest first
+          });
           
-          for (const user of sortedCaptchaUsers) {
-            roundProcessed++;
-            // Assign a new proxy port to avoid conflicts
-            const newProxyPort = await this.getNextAvailableProxyPort(user.last_proxy_port);
-            await this.userService.updateUserLastProxyPort(user.id, newProxyPort);
+          logger.info({ 
+            retryUserIds: sortedRetryUsers.map(u => u.id),
+            count: sortedRetryUsers.length 
+          }, 'Processing retryable users in priority order');
+          
+          for (const user of sortedRetryUsers) {
+            // Check if we're shutting down
+            if (isShuttingDown) {
+              logger.info('Shutdown detected, stopping retry processing');
+              break;
+            }
             
-            logger.info({ userId: user.id, email: user.email, newProxyPort }, 'Assigned new proxy port for captcha retry');
+            // Create a request for this retry
+            const request = await this.requestService.createRequest({
+              user_id: user.id,
+              status: 'RUNNING',
+              attempt_count: user.attempt_count + 1,
+              options: { ...options, retry: true }
+            });
+            
+            // Add to active requests for graceful shutdown
+            activeRequests.push(request);
+            
+            try {
+              // Assign a new proxy port to avoid conflicts
+              const newProxyPort = await this.getNextAvailableProxyPort(user.last_proxy_port);
+              await this.userService.updateUserLastProxyPort(user.id, newProxyPort);
+              
+              logger.info({ 
+                userId: user.id, 
+                email: user.email, 
+                newProxyPort, 
+                attempts: user.attempt_count,
+                lastError: user.last_error_code 
+              }, 'Processing retryable user');
 
-            const result = await this.processUser(user, options);
-            
-            if (!result.success) {
-              // Update user with error information
-              await this.userService.updateUserAttempt(user.id, {
-                last_attempt_at: new Date(),
-                attempt_count: user.attempt_count + 1,
-                last_error_code: result.errorCode,
-                last_error_message: result.errorMessage,
+              const result = await this.processUser(user, options);
+              
+              if (!result.success) {
+                retryFailed++;
+                logger.error({ userId: user.id, email: user.email, error: result.errorMessage }, 'Retry failed for user');
+                
+                // Update request with error information
+                await this.requestService.updateRequest(request.id, {
+                  status: 'WAITING_FOR_RETRY',
+                  completed_at: new Date(),
+                  error_code: result.errorCode,
+                  error_message: result.errorMessage
+                });
+              } else {
+                retrySuccessful++;
+                logger.info({ userId: user.id, email: user.email }, 'Retry successful for user');
+                
+                // Update request as successful
+                await this.requestService.updateRequest(request.id, {
+                  status: 'SUCCESS',
+                  completed_at: new Date()
+                });
+              }
+            } catch (error) {
+              retryFailed++;
+              logger.error({ userId: user.id, email: user.email, error }, 'Error during retry for user');
+              
+              // Update request with error
+              await this.requestService.updateRequest(request.id, {
+                status: 'FAILED',
+                completed_at: new Date(),
+                error_message: error instanceof Error ? error.message : 'Unknown error'
               });
-            } else {
-              // Clear captcha flag on success
-              await this.userService.clearUserCaptchaFlag(user.id);
-              roundSuccessful++;
-              logger.info({ userId: user.id, email: user.email }, 'Cleared captcha flag after successful retry');
+            } finally {
+              // Remove from active requests
+              const index = activeRequests.findIndex(r => r.id === request.id);
+              if (index > -1) {
+                activeRequests.splice(index, 1);
+              }
             }
 
             // Add delay between users to avoid rate limiting
             await this.delay(3000); // Longer delay for retries
           }
 
-          // Process other failed users (sorted by ID descending)
-          const sortedFailedUsers = failedUsers.sort((a, b) => b.id - a.id);
           logger.info({ 
-            failedUserIds: sortedFailedUsers.map(u => u.id),
-            count: sortedFailedUsers.length 
-          }, 'Processing failed users in descending ID order (highest first)');
-          
-          for (const user of sortedFailedUsers) {
-            roundProcessed++;
-            // Assign a new proxy port to avoid conflicts
-            const newProxyPort = await this.getNextAvailableProxyPort(user.last_proxy_port);
-            await this.userService.updateUserLastProxyPort(user.id, newProxyPort);
-            
-            logger.info({ userId: user.id, email: user.email, newProxyPort, lastError: user.last_error_code }, 'Assigned new proxy port for failed user retry');
-
-            const result = await this.processUser(user, options);
-            
-            if (!result.success) {
-              // Update user with error information
-              await this.userService.updateUserAttempt(user.id, {
-                last_attempt_at: new Date(),
-                attempt_count: user.attempt_count + 1,
-                last_error_code: result.errorCode,
-                last_error_message: result.errorMessage,
-              });
-            } else {
-              roundSuccessful++;
-              logger.info({ userId: user.id, email: user.email }, 'Successfully retried failed user');
-            }
-
-            // Add delay between users to avoid rate limiting
-            await this.delay(3000); // Longer delay for retries
-          }
-
-          totalProcessed += roundProcessed;
-          totalSuccessful += roundSuccessful;
-
-          logger.info({ 
-            retryRound,
-            roundProcessed,
-            roundSuccessful,
-            totalProcessed,
-            totalSuccessful
-          }, `📊 Retry round ${retryRound} complete - ${roundSuccessful}/${roundProcessed} users succeeded`);
-
-          retryRound++;
+            retrySuccessful,
+            retryFailed,
+            totalRetryUsers: retryableUsers.length
+          }, `📊 Retry processing complete - ${retrySuccessful}/${retryableUsers.length} users succeeded`);
         }
       }
 
+      // Update process run with final status
+      let totalProcessed = normalUsers.length;
+      let totalSuccessful = 0;
+      let totalFailed = 0;
+
+      // Count normal users results
+      for (const user of normalUsers) {
+        const updatedUser = await this.userService.getUserById(user.id);
+        if (updatedUser?.success_at) {
+          totalSuccessful++;
+        } else {
+          totalFailed++;
+        }
+      }
+
+      // Add retry results if retry mode was enabled
+      if (options?.retry) {
+        const retryableUsers = await this.userService.getUsersForRetry(limit);
+        totalProcessed += retryableUsers.length;
+        
+        // Count retry results
+        for (const user of retryableUsers) {
+          const updatedUser = await this.userService.getUserById(user.id);
+          if (updatedUser?.success_at) {
+            totalSuccessful++;
+          } else {
+            totalFailed++;
+          }
+        }
+      }
+
+      logger.info(`✅ Process pending users completed successfully`);
+
     } catch (error) {
       logger.error(error, 'Failed to process pending users');
+      
+      // Mark any remaining active requests as failed
+      for (const request of activeRequests) {
+        try {
+          await this.requestService.updateRequest(request.id, {
+            status: 'FAILED',
+            completed_at: new Date(),
+            error_message: error instanceof Error ? error.message : 'Unknown error'
+          });
+        } catch (updateError) {
+          logger.error(`Failed to mark request ${request.id} as failed:`, updateError);
+        }
+      }
+      
       throw error;
+    } finally {
+      // Final cleanup: Mark any hanging requests as properly finalized
+      try {
+        await this.finalizeAllHangingRequests();
+      } catch (cleanupError) {
+        logger.error('Failed to finalize hanging requests:', cleanupError);
+      }
+      
+      // Clean up signal handlers
+      process.removeAllListeners('SIGINT');
+      process.removeAllListeners('SIGTERM');
+    }
+  }
+
+  /**
+   * Finalize all hanging requests (RUNNING, WAITING_FOR_RETRY) to clean final status
+   */
+  private async finalizeAllHangingRequests(): Promise<void> {
+    logger.info('🧹 Finalizing all hanging requests...');
+    
+    try {
+      // Get all hanging requests (RUNNING or WAITING_FOR_RETRY)
+      const hangingRequests = await this.requestService.getHangingRequests();
+      
+      if (hangingRequests.length === 0) {
+        logger.info('✅ No hanging requests found');
+        return;
+      }
+      
+      logger.info(`🧹 Found ${hangingRequests.length} hanging requests to finalize`);
+      
+      for (const request of hangingRequests) {
+        try {
+          // Check the user's current status to determine final request status
+          const user = await this.userService.getUserById(request.user_id);
+          
+          if (!user) {
+            // User not found, mark request as failed
+            await this.requestService.updateRequest(request.id, {
+              status: 'FAILED',
+              completed_at: new Date(),
+              error_message: 'User not found during cleanup'
+            });
+            continue;
+          }
+          
+          let finalStatus: string;
+          let errorMessage: string | undefined;
+          
+          if (user.success_at) {
+            // User was successful
+            finalStatus = 'SUCCESS';
+          } else if (user.attempt_count >= 5) {
+            // User exceeded max retries
+            finalStatus = 'FAILED_AFTER_MAX_RETRIES';
+            errorMessage = 'Exceeded maximum retry attempts (5)';
+          } else {
+            // User still has retries left, but command is finishing
+            finalStatus = 'CANCELED';
+            errorMessage = 'Command completed before retry could be attempted';
+          }
+          
+          await this.requestService.updateRequest(request.id, {
+            status: finalStatus,
+            completed_at: new Date(),
+            error_message: errorMessage
+          });
+          
+          logger.debug(`Finalized request ${request.id} for user ${request.user_id} as ${finalStatus}`);
+          
+        } catch (error) {
+          logger.error(`Failed to finalize request ${request.id}:`, error);
+        }
+      }
+      
+      logger.info(`✅ Finalized ${hangingRequests.length} hanging requests`);
+      
+    } catch (error) {
+      logger.error('Failed to get hanging requests for cleanup:', error);
+    }
+  }
+
+  /**
+   * Process a single user (for retry operations)
+   */
+  async processSingleUser(user: User): Promise<{ success: boolean; error?: string }> {
+    try {
+      logger.info({ userId: user.id, email: user.email, country: user.country_code }, 'Processing single user for retry');
+
+      // Test proxy connection first
+      const proxyTestResult = await this.proxyTestService.testProxyWithRetry(3, 15000);
+      if (!proxyTestResult.success) {
+        logger.error({ userId: user.id }, `Proxy test failed: ${proxyTestResult.error}`);
+        return { success: false, error: `Proxy test failed: ${proxyTestResult.error}` };
+      }
+
+      // Process the user
+      const result = await this.processUser(user);
+      
+      if (result.success) {
+        logger.info({ userId: user.id, email: user.email }, 'Single user processing successful');
+        return { success: true };
+      } else {
+        logger.error({ userId: user.id, email: user.email, errorCode: result.errorCode }, 'Single user processing failed');
+        return { success: false, error: result.errorMessage };
+      }
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      logger.error({ userId: user.id, error: errorMessage }, 'Error processing single user');
+      return { success: false, error: errorMessage };
     }
   }
 

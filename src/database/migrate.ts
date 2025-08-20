@@ -12,6 +12,7 @@ import * as migration009 from './migrations/009_add_otp_provider.js';
 import * as migration010 from './migrations/010_add_rate_step_completed.js';
 import * as migration011 from './migrations/011_rename_manual_otp_to_otp.js';
 import * as migration012 from './migrations/012_add_avatar_uploaded_at.js';
+import * as migration013 from './migrations/013_add_process_runs_table.js';
 
 const logger = getLogger(import.meta.url);
 
@@ -27,7 +28,8 @@ const migrations = [
   { name: '009_add_otp_provider', up: migration009.up, down: migration009.down },
   { name: '010_add_rate_step_completed', up: migration010.up, down: migration010.down },
   { name: '011_rename_manual_otp_to_otp', up: migration011.up, down: migration011.down },
-  { name: '012_add_avatar_uploaded_at', up: migration012.up, down: migration012.down }
+  { name: '012_add_avatar_uploaded_at', up: migration012.up, down: migration012.down },
+  { name: '013_add_process_runs_table', up: migration013.up, down: migration013.down }
 ];
 
 export async function runMigrations(): Promise<void> {

@@ -95,6 +95,7 @@ export class UserService {
         .where('success_at', 'is', null) // No success yet
         .where('up_created_at', 'is not', null) // Has up_created_at (normally allowed to run)
         .where('captcha_flagged_at', 'is not', null) // Only captcha-flagged users
+        .where('attempt_count', '<', 5) // Maximum 5 attempts per user
         .orderBy('captcha_flagged_at', 'asc') // Process oldest captcha flags first
         .limit(limit)
         .execute();
@@ -115,6 +116,7 @@ export class UserService {
         .where('up_created_at', 'is not', null) // Has up_created_at (normally allowed to run)
         .where('captcha_flagged_at', 'is', null) // Exclude captcha-flagged users (handled separately)
         .where('rate_step_completed_at', 'is', null) // Include only users who haven't completed rate step yet
+        .where('attempt_count', '<', 5) // Maximum 5 attempts per user
         .orderBy('last_attempt_at', 'asc') // Process oldest failures first
         .limit(limit)
         .execute();
@@ -122,6 +124,53 @@ export class UserService {
       return users;
     } catch (error) {
       logger.error(error, 'Failed to get failed users');
+      throw error;
+    }
+  }
+
+  /**
+   * Get users that need retry (failed users with less than 5 attempts)
+   */
+  async getUsersForRetry(limit: number = 10): Promise<User[]> {
+    try {
+      const users = await this.db
+        .selectFrom('users')
+        .selectAll()
+        .where('success_at', 'is', null) // No success yet
+        .where('up_created_at', 'is not', null) // Has up_created_at (normally allowed to run)
+        .where('attempt_count', '<', 5) // Maximum 5 attempts per user
+        .where('attempt_count', '>', 0) // Has at least one attempt (failed before)
+        .orderBy('attempt_count', 'desc') // Process users with most attempts first
+        .orderBy('last_attempt_at', 'asc') // Then by oldest attempt
+        .limit(limit)
+        .execute();
+
+      return users;
+    } catch (error) {
+      logger.error(error, 'Failed to get users for retry');
+      throw error;
+    }
+  }
+
+  /**
+   * Get users that have exceeded the maximum retry attempts
+   */
+  async getUsersExceededMaxRetries(limit: number = 10): Promise<User[]> {
+    try {
+      const users = await this.db
+        .selectFrom('users')
+        .selectAll()
+        .where('success_at', 'is', null) // No success yet
+        .where('up_created_at', 'is not', null) // Has up_created_at (normally allowed to run)
+        .where('attempt_count', '>=', 5) // Exceeded maximum attempts
+        .orderBy('attempt_count', 'desc') // Process users with most attempts first
+        .orderBy('last_attempt_at', 'asc') // Then by oldest attempt
+        .limit(limit)
+        .execute();
+
+      return users;
+    } catch (error) {
+      logger.error(error, 'Failed to get users exceeded max retries');
       throw error;
     }
   }
@@ -337,6 +386,8 @@ export class UserService {
     successful: number;
     pending: number;
     failed: number;
+    retryable: number;
+    exceeded_max_retries: number;
   }> {
     try {
       const [total] = await this.db
@@ -365,11 +416,30 @@ export class UserService {
         .where('attempt_count', '>', 0)
         .execute();
 
+      const [retryable] = await this.db
+        .selectFrom('users')
+        .select((eb) => eb.fn.countAll().as('count'))
+        .where('success_at', 'is', null)
+        .where('up_created_at', 'is not', null)
+        .where('attempt_count', '>', 0)
+        .where('attempt_count', '<', 5)
+        .execute();
+
+      const [exceededMaxRetries] = await this.db
+        .selectFrom('users')
+        .select((eb) => eb.fn.countAll().as('count'))
+        .where('success_at', 'is', null)
+        .where('up_created_at', 'is not', null)
+        .where('attempt_count', '>=', 5)
+        .execute();
+
       return {
         total: Number(total.count),
         successful: Number(successful.count),
         pending: Number(pending.count),
         failed: Number(failed.count),
+        retryable: Number(retryable.count),
+        exceeded_max_retries: Number(exceededMaxRetries.count),
       };
     } catch (error) {
       logger.error(error, 'Failed to get stats');
