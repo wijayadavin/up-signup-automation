@@ -21,11 +21,12 @@ export class RequestService {
           error_code: input.error_code || null,
           error_message: input.error_message || null,
           options: input.options || null,
+          country_code: input.country_code || null,
         })
         .returningAll()
         .execute();
 
-      logger.info({ requestId: request.id, userId: input.user_id, status: request.status }, 'Request created');
+      logger.info({ requestId: request.id, userId: input.user_id, status: request.status, countryCode: request.country_code }, 'Request created');
       return request;
     } catch (error) {
       logger.error(error, 'Failed to create request');
@@ -46,12 +47,13 @@ export class RequestService {
           ...(input.completed_at && { completed_at: input.completed_at }),
           ...(input.error_code && { error_code: input.error_code }),
           ...(input.error_message && { error_message: input.error_message }),
+          ...(input.country_code && { country_code: input.country_code }),
         })
         .where('id', '=', id)
         .returningAll()
         .execute();
 
-      logger.info({ requestId: id, status: input.status }, 'Request updated');
+      logger.info({ requestId: id, status: input.status, countryCode: input.country_code }, 'Request updated');
       return request;
     } catch (error) {
       logger.error(error, 'Failed to update request');
@@ -158,14 +160,14 @@ export class RequestService {
   }
 
   /**
-   * Get hanging requests (RUNNING or WAITING_FOR_RETRY)
+   * Get hanging requests (RUNNING, WAITING_FOR_RETRY, or QUEUED)
    */
   async getHangingRequests(): Promise<Request[]> {
     try {
       const requests = await this.db
         .selectFrom('requests')
         .selectAll()
-        .where('status', 'in', ['RUNNING', 'WAITING_FOR_RETRY'])
+        .where('status', 'in', ['RUNNING', 'WAITING_FOR_RETRY', 'QUEUED'])
         .orderBy('started_at', 'asc')
         .execute();
 
@@ -295,6 +297,66 @@ export class RequestService {
     } catch (error) {
       logger.error(error, 'Failed to get current attempt count for user');
       return 0;
+    }
+  }
+
+  /**
+   * Get requests summary with country and status breakdown
+   */
+  async getRequestsSummary(): Promise<{
+    totalRequests: number;
+    statusBreakdown: { status: string; count: number }[];
+    countryBreakdown: { country_code: string | null; count: number }[];
+    recentRequests: Request[];
+  }> {
+    try {
+      // Get total count
+      const totalResult = await this.db
+        .selectFrom('requests')
+        .select((eb) => eb.fn.count<number>('id').as('total'))
+        .executeTakeFirst();
+
+      // Get status breakdown
+      const statusBreakdown = await this.db
+        .selectFrom('requests')
+        .select(['status'])
+        .select((eb) => eb.fn.count<number>('id').as('count'))
+        .groupBy('status')
+        .orderBy('count', 'desc')
+        .execute();
+
+      // Get country breakdown
+      const countryBreakdown = await this.db
+        .selectFrom('requests')
+        .select(['country_code'])
+        .select((eb) => eb.fn.count<number>('id').as('count'))
+        .groupBy('country_code')
+        .orderBy('count', 'desc')
+        .execute();
+
+      // Get recent requests (last 10)
+      const recentRequests = await this.db
+        .selectFrom('requests')
+        .selectAll()
+        .orderBy('started_at', 'desc')
+        .limit(10)
+        .execute();
+
+      return {
+        totalRequests: totalResult?.total || 0,
+        statusBreakdown: statusBreakdown.map(row => ({
+          status: row.status,
+          count: Number(row.count)
+        })),
+        countryBreakdown: countryBreakdown.map(row => ({
+          country_code: row.country_code,
+          count: Number(row.count)
+        })),
+        recentRequests
+      };
+    } catch (error) {
+      logger.error(error, 'Failed to get requests summary');
+      throw error;
     }
   }
 }

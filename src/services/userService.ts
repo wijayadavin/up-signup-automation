@@ -16,6 +16,12 @@ export class UserService {
 
   async createUser(input: CreateUserInput): Promise<User> {
     try {
+      // Assign a unique proxy port for the new user
+      const proxyPort = await this.assignUniqueProxyPortForNewUser();
+      if (!proxyPort) {
+        throw new Error('Failed to assign unique proxy port for new user');
+      }
+
       const [user] = await this.db
         .insertInto('users')
         .values({
@@ -25,16 +31,36 @@ export class UserService {
           password: input.password,
           country_code: input.country_code,
           attempt_count: 0,
+          last_proxy_port: proxyPort,
         })
         .returningAll()
         .execute();
 
-      logger.info({ userId: user.id, email: user.email }, 'User created successfully');
+      logger.info({ userId: user.id, email: user.email, proxyPort }, 'User created successfully with proxy port');
       return user;
     } catch (error) {
       logger.error(error, 'Failed to create user');
       throw error;
     }
+  }
+
+  /**
+   * Assign a unique proxy port for a new user
+   */
+  private async assignUniqueProxyPortForNewUser(): Promise<number | null> {
+    const basePort = 10001;
+    const maxPort = 10100;
+    
+    // Try to find an available port
+    for (let port = basePort; port <= maxPort; port++) {
+      const isAvailable = await this.isProxyPortUnique(port);
+      if (isAvailable) {
+        return port;
+      }
+    }
+    
+    // No available ports found
+    return null;
   }
 
   async getUserById(id: number): Promise<User | null> {
@@ -362,6 +388,55 @@ export class UserService {
       return user;
     } catch (error) {
       logger.error(error, 'Failed to update user last_proxy_port');
+      throw error;
+    }
+  }
+
+  /**
+   * Check if a proxy port is unique (not used by any other user)
+   */
+  async isProxyPortUnique(proxyPort: number, excludeUserId?: number): Promise<boolean> {
+    try {
+      let query = this.db
+        .selectFrom('users')
+        .select('id')
+        .where('last_proxy_port', '=', proxyPort);
+
+      // Exclude the current user if specified
+      if (excludeUserId) {
+        query = query.where('id', '!=', excludeUserId);
+      }
+
+      const existingUser = await query.executeTakeFirst();
+      
+      // Port is unique if no user is found using it
+      const isUnique = !existingUser;
+      
+      if (!isUnique) {
+        logger.warn({ proxyPort, existingUserId: existingUser?.id, excludeUserId }, 'Proxy port is not unique');
+      }
+      
+      return isUnique;
+    } catch (error) {
+      logger.error(error, 'Failed to check proxy port uniqueness');
+      throw error;
+    }
+  }
+
+  /**
+   * Get all users with their proxy ports for debugging
+   */
+  async getUsersWithProxyPorts(): Promise<{ id: number; email: string; last_proxy_port: number | null }[]> {
+    try {
+      const users = await this.db
+        .selectFrom('users')
+        .select(['id', 'email', 'last_proxy_port'])
+        .orderBy('last_proxy_port', 'asc')
+        .execute();
+
+      return users;
+    } catch (error) {
+      logger.error(error, 'Failed to get users with proxy ports');
       throw error;
     }
   }

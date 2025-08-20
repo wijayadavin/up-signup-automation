@@ -282,6 +282,17 @@ export class UpworkService {
     try {
       logger.info({ userId: user.id, email: user.email, country: user.country_code }, 'Processing user');
 
+      // Validate and ensure user has a unique proxy port
+      const proxyPortValidation = await this.validateAndAssignProxyPort(user);
+      if (!proxyPortValidation.success) {
+        logger.error({ userId: user.id, error: proxyPortValidation.error }, 'Proxy port validation failed');
+        return {
+          success: false,
+          errorCode: 'PROXY_PORT_VALIDATION_FAILED',
+          errorMessage: proxyPortValidation.error
+        };
+      }
+
       // Update attempt count
       await this.userService.updateUserAttempt(user.id, {
         last_attempt_at: new Date(),
@@ -495,6 +506,40 @@ export class UpworkService {
       if (normalUsers.length > 0) {
         logger.info({ count: normalUsers.length }, 'Processing normal pending users (excluding captcha-flagged)');
 
+        // Sort users by ID in descending order (higher IDs first)
+        const sortedNormalUsers = normalUsers.sort((a, b) => b.id - a.id);
+        logger.info({ 
+          userIds: sortedNormalUsers.map(u => u.id),
+          count: sortedNormalUsers.length 
+        }, 'Processing users in descending ID order (highest first)');
+
+        // Create requests for all users upfront to show the full queue
+        logger.info('📋 Creating requests for all pending users...');
+        const userRequests: Map<number, any> = new Map();
+        
+        for (const user of sortedNormalUsers) {
+          const request = await this.requestService.createRequest({
+            user_id: user.id,
+            status: 'QUEUED', // Start as queued, will change to RUNNING when processing starts
+            attempt_count: user.attempt_count + 1,
+            options: options || {},
+            country_code: user.country_code
+          });
+          
+          userRequests.set(user.id, request);
+          logger.info(`📝 Queued request #${request.id} for user ${user.id} (${user.country_code})`);
+        }
+
+        // Show initial queue status
+        logger.info(`🎯 Created ${userRequests.size} requests in queue`);
+        
+        // Show initial summary to display the full workload
+        try {
+          await this.showRequestsSummary();
+        } catch (summaryError) {
+          logger.error('Failed to show initial requests summary:', summaryError);
+        }
+
         // Create a temporary page to clear browser state at the start
         let tempPage: Page | null = null;
         try {
@@ -512,14 +557,8 @@ export class UpworkService {
             }
           }
         }
-
-        // Sort users by ID in descending order (higher IDs first)
-        const sortedNormalUsers = normalUsers.sort((a, b) => b.id - a.id);
-        logger.info({ 
-          userIds: sortedNormalUsers.map(u => u.id),
-          count: sortedNormalUsers.length 
-        }, 'Processing users in descending ID order (highest first)');
         
+        // Now process each user
         for (const user of sortedNormalUsers) {
           // Check if we're shutting down
           if (isShuttingDown) {
@@ -527,16 +566,22 @@ export class UpworkService {
             break;
           }
           
-          // Create a request for this user
-          const request = await this.requestService.createRequest({
-            user_id: user.id,
-            status: 'RUNNING',
-            attempt_count: user.attempt_count + 1,
-            options: options || {}
+          // Get the request for this user and update it to RUNNING
+          const request = userRequests.get(user.id);
+          if (!request) {
+            logger.error(`No request found for user ${user.id}, skipping`);
+            continue;
+          }
+
+          // Update request status to RUNNING when we start processing
+          await this.requestService.updateRequest(request.id, {
+            status: 'RUNNING'
           });
           
           // Add to active requests for graceful shutdown
           activeRequests.push(request);
+          
+          logger.info(`🚀 Starting processing for user ${user.id} (request #${request.id})`);
           
           try {
             const result = await this.processUser(user, options);
@@ -655,7 +700,35 @@ export class UpworkService {
             retryUserIds: sortedRetryUsers.map(u => u.id),
             count: sortedRetryUsers.length 
           }, 'Processing retryable users in priority order');
+
+          // Create requests for all retry users upfront to show the full retry queue
+          logger.info('📋 Creating retry requests for all retryable users...');
+          const retryUserRequests: Map<number, any> = new Map();
           
+          for (const user of sortedRetryUsers) {
+            const request = await this.requestService.createRequest({
+              user_id: user.id,
+              status: 'QUEUED', // Start as queued, will change to RUNNING when processing starts
+              attempt_count: user.attempt_count + 1,
+              options: { ...options, retry: true },
+              country_code: user.country_code
+            });
+            
+            retryUserRequests.set(user.id, request);
+            logger.info(`🔄 Queued retry request #${request.id} for user ${user.id} (${user.country_code}) - attempt ${request.attempt_count}/5`);
+          }
+
+          // Show updated queue status including retry requests
+          logger.info(`🎯 Created ${retryUserRequests.size} retry requests in queue`);
+          
+          // Show updated summary to display the full workload including retries
+          try {
+            await this.showRequestsSummary();
+          } catch (summaryError) {
+            logger.error('Failed to show updated requests summary:', summaryError);
+          }
+          
+          // Now process each retry user
           for (const user of sortedRetryUsers) {
             // Check if we're shutting down
             if (isShuttingDown) {
@@ -663,16 +736,22 @@ export class UpworkService {
               break;
             }
             
-            // Create a request for this retry
-            const request = await this.requestService.createRequest({
-              user_id: user.id,
-              status: 'RUNNING',
-              attempt_count: user.attempt_count + 1,
-              options: { ...options, retry: true }
+            // Get the request for this user and update it to RUNNING
+            const request = retryUserRequests.get(user.id);
+            if (!request) {
+              logger.error(`No retry request found for user ${user.id}, skipping`);
+              continue;
+            }
+
+            // Update request status to RUNNING when we start processing
+            await this.requestService.updateRequest(request.id, {
+              status: 'RUNNING'
             });
             
             // Add to active requests for graceful shutdown
             activeRequests.push(request);
+            
+            logger.info(`🔄 Starting retry processing for user ${user.id} (request #${request.id})`);
             
             try {
               // Assign a new proxy port to avoid conflicts
@@ -797,10 +876,72 @@ export class UpworkService {
       } catch (cleanupError) {
         logger.error('Failed to finalize hanging requests:', cleanupError);
       }
+
+      // Show requests summary
+      try {
+        await this.showRequestsSummary();
+      } catch (summaryError) {
+        logger.error('Failed to show requests summary:', summaryError);
+      }
       
       // Clean up signal handlers
       process.removeAllListeners('SIGINT');
       process.removeAllListeners('SIGTERM');
+    }
+  }
+
+  /**
+   * Show requests summary with country and status breakdowns
+   */
+  private async showRequestsSummary(): Promise<void> {
+    logger.info('📊 === Requests Processing Summary ===');
+    
+    try {
+      const summary = await this.requestService.getRequestsSummary();
+      
+      // Total requests
+      logger.info(`📈 Total Requests: ${summary.totalRequests}`);
+      
+      // Status breakdown
+      if (summary.statusBreakdown.length > 0) {
+        logger.info('📋 Status Breakdown:');
+        for (const status of summary.statusBreakdown) {
+          const percentage = summary.totalRequests > 0 
+            ? Math.round((status.count / summary.totalRequests) * 100) 
+            : 0;
+          logger.info(`  ${status.status}: ${status.count} (${percentage}%)`);
+        }
+      }
+      
+      // Country breakdown
+      if (summary.countryBreakdown.length > 0) {
+        logger.info('🌍 Country Breakdown:');
+        for (const country of summary.countryBreakdown) {
+          const countryName = country.country_code || 'Unknown';
+          const percentage = summary.totalRequests > 0 
+            ? Math.round((country.count / summary.totalRequests) * 100) 
+            : 0;
+          logger.info(`  ${countryName}: ${country.count} (${percentage}%)`);
+        }
+      }
+      
+      // Recent requests sample
+      if (summary.recentRequests.length > 0) {
+        logger.info('🕒 Recent Requests (last 5):');
+        const recentSample = summary.recentRequests.slice(0, 5);
+        for (const request of recentSample) {
+          const duration = request.completed_at 
+            ? Math.round((request.completed_at.getTime() - request.started_at.getTime()) / 1000)
+            : 'running';
+          const country = request.country_code || 'Unknown';
+          logger.info(`  #${request.id}: User ${request.user_id} (${country}) - ${request.status} [${duration}${typeof duration === 'number' ? 's' : ''}]`);
+        }
+      }
+      
+      logger.info('📊 === End Summary ===');
+      
+    } catch (error) {
+      logger.error('Failed to generate requests summary:', error);
     }
   }
 
@@ -811,7 +952,7 @@ export class UpworkService {
     logger.info('🧹 Finalizing all hanging requests...');
     
     try {
-      // Get all hanging requests (RUNNING or WAITING_FOR_RETRY)
+      // Get all hanging requests (RUNNING, WAITING_FOR_RETRY, or QUEUED)
       const hangingRequests = await this.requestService.getHangingRequests();
       
       if (hangingRequests.length === 0) {
@@ -928,6 +1069,68 @@ export class UpworkService {
 
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Validate and assign a unique proxy port to a user
+   */
+  private async validateAndAssignProxyPort(user: User): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Check if user already has a proxy port
+      if (user.last_proxy_port !== null) {
+        // Validate that the port is unique
+        const isPortUnique = await this.userService.isProxyPortUnique(user.last_proxy_port, user.id);
+        if (!isPortUnique) {
+          logger.warn({ userId: user.id, port: user.last_proxy_port }, 'User has duplicate proxy port, will reassign');
+          // Continue to reassign below
+        } else {
+          logger.info({ userId: user.id, port: user.last_proxy_port }, 'User has valid unique proxy port');
+          return { success: true };
+        }
+      }
+
+      // Assign a new unique proxy port
+      const newProxyPort = await this.assignUniqueProxyPort(user.id);
+      if (!newProxyPort) {
+        return { 
+          success: false, 
+          error: 'Failed to assign unique proxy port - no available ports in range' 
+        };
+      }
+
+      // Update user with new proxy port
+      await this.userService.updateUserLastProxyPort(user.id, newProxyPort);
+      
+      // Update the user object to reflect the change
+      user.last_proxy_port = newProxyPort;
+      
+      logger.info({ userId: user.id, newPort: newProxyPort }, 'Assigned unique proxy port to user');
+      return { success: true };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      logger.error({ userId: user.id, error: errorMessage }, 'Failed to validate/assign proxy port');
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  /**
+   * Assign a unique proxy port to a user
+   */
+  private async assignUniqueProxyPort(userId: number): Promise<number | null> {
+    const basePort = 10001;
+    const maxPort = 10100;
+    
+    // Try to find an available port
+    for (let port = basePort; port <= maxPort; port++) {
+      const isAvailable = await this.userService.isProxyPortUnique(port, userId);
+      if (isAvailable) {
+        return port;
+      }
+    }
+    
+    // No available ports found
+    return null;
   }
 
   private async getNextAvailableProxyPort(currentPort: number | null): Promise<number> {

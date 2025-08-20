@@ -673,6 +673,9 @@ const requestsCmd = command({
           logger.info(`  Started: ${request.started_at.toISOString()}`);
           logger.info(`  Duration: ${duration}${typeof duration === 'number' ? 's' : ''}`);
           logger.info(`  Attempts: ${request.attempt_count}/5`);
+          if (request.country_code) {
+            logger.info(`  Country: ${request.country_code}`);
+          }
           if (request.error_code) {
             logger.info(`  Error Code: ${request.error_code}`);
           }

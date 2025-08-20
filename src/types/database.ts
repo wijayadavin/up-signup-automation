@@ -22,6 +22,7 @@ export interface RequestsTable {
   error_code: string | null;
   error_message: string | null;
   options: any | null; // JSONB field for storing command options
+  country_code: string | null;
 }
 
 export interface UsersTable {
@@ -45,7 +46,7 @@ export interface UsersTable {
   phone: string | null;
   onboarding_completed_at: Date | null;
   last_session_state: string | null;
-  last_proxy_port: number | null;
+  last_proxy_port: number;
   otp: number | null;
   otp_provider: string | null;
   rate_step_completed_at: Date | null;
@@ -76,7 +77,7 @@ export interface User {
   phone: string | null;
   onboarding_completed_at: Date | null;
   last_session_state: string | null;
-  last_proxy_port: number | null;
+  last_proxy_port: number;
   otp: number | null;
   otp_provider: string | null;
   rate_step_completed_at: Date | null;
@@ -123,6 +124,7 @@ export interface Request {
   error_code: string | null;
   error_message: string | null;
   options: any | null;
+  country_code: string | null;
 }
 
 export interface CreateRequestInput {
@@ -132,6 +134,7 @@ export interface CreateRequestInput {
   error_code?: string;
   error_message?: string;
   options?: any;
+  country_code?: string;
 }
 
 export interface UpdateRequestInput {
@@ -140,4 +143,5 @@ export interface UpdateRequestInput {
   completed_at?: Date;
   error_code?: string;
   error_message?: string;
+  country_code?: string;
 }
