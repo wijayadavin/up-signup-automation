@@ -754,17 +754,20 @@ export class UpworkService {
             logger.info(`🔄 Starting retry processing for user ${user.id} (request #${request.id})`);
             
             try {
-              // Assign a new proxy port to avoid conflicts
-              const newProxyPort = await this.getNextAvailableProxyPort(user.last_proxy_port);
-              await this.userService.updateUserLastProxyPort(user.id, newProxyPort);
+              // Validate and assign a unique proxy port to avoid conflicts
+              const proxyValidation = await this.validateAndAssignProxyPort(user);
+              if (!proxyValidation.success) {
+                logger.error({ userId: user.id, error: proxyValidation.error }, 'Failed to assign unique proxy port for retry');
+                throw new Error(`Failed to assign unique proxy port: ${proxyValidation.error}`);
+              }
               
               logger.info({ 
                 userId: user.id, 
                 email: user.email, 
-                newProxyPort, 
+                newProxyPort: user.last_proxy_port, 
                 attempts: user.attempt_count,
                 lastError: user.last_error_code 
-              }, 'Processing retryable user');
+              }, 'Processing retryable user with validated proxy port');
 
               const result = await this.processUser(user, options);
               
@@ -1134,12 +1137,31 @@ export class UpworkService {
   }
 
   private async getNextAvailableProxyPort(currentPort: number | null): Promise<number> {
-    // Start from port 10001 if no current port, otherwise increment by 1
+    // Use the existing assignUniqueProxyPort method which properly checks for uniqueness
     const basePort = 10001;
-    const nextPort = currentPort ? currentPort + 1 : basePort;
-    
-    // Ensure we don't exceed reasonable port range (up to 10100)
     const maxPort = 10100;
-    return Math.min(nextPort, maxPort);
+    
+    // Start from current port + 1 if available, otherwise from base port
+    const startPort = currentPort ? Math.min(currentPort + 1, maxPort) : basePort;
+    
+    // Try to find an available port starting from the calculated start port
+    for (let port = startPort; port <= maxPort; port++) {
+      const isAvailable = await this.userService.isProxyPortUnique(port);
+      if (isAvailable) {
+        return port;
+      }
+    }
+    
+    // If no port found from startPort onwards, try from basePort to startPort-1
+    for (let port = basePort; port < startPort; port++) {
+      const isAvailable = await this.userService.isProxyPortUnique(port);
+      if (isAvailable) {
+        return port;
+      }
+    }
+    
+    // If still no port found, return the startPort as fallback (this will cause an error but at least we tried)
+    logger.warn(`No available proxy ports found in range ${basePort}-${maxPort}, using fallback port ${startPort}`);
+    return startPort;
   }
 }

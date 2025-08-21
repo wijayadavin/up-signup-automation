@@ -13,6 +13,9 @@ export class FormAutomation extends BaseAutomation {
   
   // Form field filling with verification
   async fillField(fieldSelectors: string[], value: string, fieldName: string): Promise<AutomationResult> {
+    // Check if we're in a modal context to be extra careful
+    const isInModal = await this.page.$('[role="dialog"], [data-qa*="dialog"], .air3-modal-content');
+    
     const field = await this.waitForSelectorWithRetry(fieldSelectors, 10000);
     
     if (!field) {
@@ -22,17 +25,18 @@ export class FormAutomation extends BaseAutomation {
       );
     }
 
-    // Special handling for password fields - more careful typing and verification
+    // Special handling for password fields and employment fields - more careful typing and verification
     const isPasswordField = fieldName.toLowerCase() === 'password';
-    const maxRetries = isPasswordField ? 3 : 2;
+    const isEmploymentField = fieldName.toLowerCase().includes('title') || fieldName.toLowerCase().includes('company');
+    const maxRetries = isPasswordField || isEmploymentField ? 3 : 2;
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       logger.debug(`Attempt ${attempt} to fill ${fieldName} field`);
       
       await this.clearAndType(field, value);
       
-      // Wait a bit longer for password fields to ensure the value is set
-      if (isPasswordField) {
+      // Wait a bit longer for password fields and employment fields to ensure the value is set
+      if (isPasswordField || isEmploymentField) {
         await this.randomDelay(1000, 2000);
       }
       
@@ -73,14 +77,17 @@ export class FormAutomation extends BaseAutomation {
           return this.createSuccess();
         }
       } else {
-        // If still no value after blur, try clicking outside the field
-        await this.page.mouse.click(0, 0); // Click at top-left corner to deselect
-        await this.randomDelay(300, 500);
-        
-        const enteredValueAfterClick = await field.evaluate((el: Element) => (el as HTMLInputElement).value);
-        if (enteredValueAfterClick && enteredValueAfterClick.trim() !== '') {
-          logger.info(`${fieldName} filled successfully after deselect: ${enteredValueAfterClick}`);
-          return this.createSuccess();
+        // If still no value after blur, try pressing Tab to move focus instead of clicking
+        // But only if we're not in a modal to avoid closing it
+        if (!isInModal) {
+          await this.page.keyboard.press('Tab');
+          await this.randomDelay(300, 500);
+          
+          const enteredValueAfterTab = await field.evaluate((el: Element) => (el as HTMLInputElement).value);
+          if (enteredValueAfterTab && enteredValueAfterTab.trim() !== '') {
+            logger.info(`${fieldName} filled successfully after tab: ${enteredValueAfterTab}`);
+            return this.createSuccess();
+          }
         }
       }
       
@@ -106,7 +113,7 @@ export class FormAutomation extends BaseAutomation {
   }
 
   // Special method for password entry with extra care
-  async fillPasswordField(fieldSelectors: string[], password: string): Promise<AutomationResult> {
+  async fillPasswordField(fieldSelectors: string[], password: string, tryEnterSubmission: boolean = false): Promise<AutomationResult> {
     logger.info('Waiting for password field to appear...');
     
     // Wait longer for password field since it appears after page transition
@@ -176,6 +183,12 @@ export class FormAutomation extends BaseAutomation {
     // More lenient password verification: check if field has any value
     if (enteredPassword && enteredPassword.trim() !== '') {
       logger.info(`Password filled successfully (length: ${enteredPassword.length})`);
+      
+      // Optionally try Enter key submission after successful password entry
+      if (tryEnterSubmission) {
+        await this.tryEnterKeySubmission();
+      }
+      
       return this.createSuccess();
     }
     
@@ -205,6 +218,12 @@ export class FormAutomation extends BaseAutomation {
     // More lenient retry verification
     if (retryPassword && retryPassword.trim() !== '') {
       logger.info(`Password filled successfully on retry (length: ${retryPassword.length})`);
+      
+      // Optionally try Enter key submission after successful password entry
+      if (tryEnterSubmission) {
+        await this.tryEnterKeySubmission();
+      }
+      
       return this.createSuccess();
     }
     
@@ -212,6 +231,152 @@ export class FormAutomation extends BaseAutomation {
       'PASSWORD_ENTRY_FAILED',
       `Failed to enter password correctly. Field is empty after retry.`
     );
+  }
+
+  // Method to try form submission via Enter key after password entry
+  async tryEnterKeySubmission(): Promise<void> {
+    logger.info('Trying Enter key submission for password form...');
+    
+    try {
+      // Wait a moment for any animations to complete
+      await this.randomDelay(1000, 2000);
+      
+      // Press Enter key to submit the form
+      await this.page.keyboard.press('Enter');
+      logger.info('✅ Enter key pressed for form submission');
+      
+      // Wait longer for potential page transition and processing
+      await this.randomDelay(4000, 6000);
+    } catch (error) {
+      logger.warn(`Enter key submission failed: ${error}`);
+    }
+  }
+
+    // Enhanced form submission with multiple fallback methods
+  async submitPasswordForm(): Promise<void> {
+    logger.info('Attempting password form submission with multiple methods...');
+    
+    // Method 1: Try Enter key
+    try {
+      await this.page.keyboard.press('Enter');
+      logger.info('✅ Method 1: Enter key pressed');
+      await this.randomDelay(4000, 6000);
+    } catch (error) {
+      logger.warn(`Method 1 (Enter key) failed: ${error}`);
+    }
+    
+    // Method 2: Try clicking submit button with JavaScript
+    try {
+      const clicked = await this.page.evaluate(() => {
+        const submitSelectors = [
+          'button[type="submit"]',
+          'button[id="login_password_continue"]',
+          'button[data-ev-label="Continue"]',
+          'button[button-role="continue"]',
+          '.air3-btn-primary',
+          '[data-qa="login_password_continue"]',
+          'button[data-ev-label="login_password_continue"]'
+        ];
+        
+        // First try the specific selectors
+        for (const selector of submitSelectors) {
+          const button = document.querySelector(selector);
+          if (button && (button as HTMLElement).offsetParent !== null) {
+            (button as HTMLElement).click();
+            return true;
+          }
+        }
+        
+        // Then try text-based selection for buttons with specific text
+        const allButtons = document.querySelectorAll('button');
+        for (const button of allButtons) {
+          const text = button.textContent?.trim().toLowerCase();
+          if (text === 'continue' || text === 'log in' || text === 'submit') {
+            if ((button as HTMLElement).offsetParent !== null) {
+              (button as HTMLElement).click();
+              return true;
+            }
+          }
+        }
+        
+        return false;
+      });
+      
+      if (clicked) {
+        logger.info('✅ Method 2: Submit button clicked via JavaScript');
+        await this.randomDelay(4000, 6000);
+      } else {
+        logger.warn('Method 2: No submit button found');
+      }
+    } catch (error) {
+      logger.warn(`Method 2 (JavaScript click) failed: ${error}`);
+    }
+    
+    // Method 3: Try form submission
+    try {
+      await this.page.evaluate(() => {
+        const forms = document.querySelectorAll('form');
+        for (const form of forms) {
+          if (form.querySelector('input[type="password"]')) {
+            form.submit();
+            return true;
+          }
+        }
+        return false;
+      });
+      logger.info('✅ Method 3: Form submitted via JavaScript');
+      await this.randomDelay(4000, 6000);
+    } catch (error) {
+      logger.warn(`Method 3 (Form submission) failed: ${error}`);
+    }
+  }
+
+  // Check if form submission was successful
+  async checkFormSubmissionSuccess(): Promise<boolean> {
+    try {
+      const success = await this.page.evaluate(() => {
+        // Check for various success indicators
+        const indicators = [
+          // URL-based indicators
+          window.location.href.includes('/nx/create-profile'),
+          window.location.href.includes('/dashboard'),
+          window.location.href.includes('/welcome'),
+          
+          // Page content indicators
+          document.querySelector('[data-qa="get-started-btn"]'),
+          
+          // Error indicators (inverse)
+          !document.querySelector('.error'),
+          !document.querySelector('.alert-danger'),
+          !document.querySelector('[role="alert"]'),
+          
+          // Password field should be gone
+          !document.querySelector('#login_password'),
+          !document.querySelector('input[type="password"]')
+        ];
+        
+        // Check for Welcome text in h1 elements
+        const h1Elements = document.querySelectorAll('h1');
+        const hasWelcomeH1 = Array.from(h1Elements).some(h1 => 
+          h1.textContent?.toLowerCase().includes('welcome')
+        );
+        
+        // Check for Get Started button
+        const buttons = document.querySelectorAll('button');
+        const hasGetStartedButton = Array.from(buttons).some(button => 
+          button.textContent?.toLowerCase().includes('get started')
+        );
+        
+        const allIndicators = [...indicators, hasWelcomeH1, hasGetStartedButton];
+        const positiveIndicators = allIndicators.filter(Boolean).length;
+        return positiveIndicators >= 3; // At least 3 positive indicators
+      });
+      
+      return success;
+    } catch (error) {
+      logger.warn(`Error checking form submission success: ${error}`);
+      return false;
+    }
   }
 
   // Dropdown selection

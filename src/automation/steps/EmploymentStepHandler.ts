@@ -32,6 +32,257 @@ export class EmploymentStepHandler extends StepHandler {
     }
   }
 
+  private async ensureModalIsOpen(): Promise<boolean> {
+    try {
+      // Check for modal confirmation dialog and handle it
+      const confirmDialog = await this.page.$('text=Are you sure you want to close this window?');
+      if (confirmDialog) {
+        logger.warn('Modal close confirmation dialog detected - clicking Save Changes to keep modal open');
+        const saveChangesBtn = await this.page.$('button:has-text("Save Changes")');
+        if (saveChangesBtn) {
+          await saveChangesBtn.click();
+          await this.randomDelay(500, 800);
+        }
+      }
+      
+      const modal = await this.page.$('[data-qa="employment-dialog-body"]');
+      if (!modal) {
+        logger.warn('Modal appears to be closed');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      logger.warn('Error checking modal status:', error);
+      return false;
+    }
+  }
+
+  private async fillComboboxField(fieldSelectors: string[], value: string, fieldName: string): Promise<AutomationResult> {
+    logger.info(`Filling combobox field: ${fieldName} with value: "${value}"`);
+    
+    const field = await this.waitForSelectorWithRetry(fieldSelectors, 10000);
+    
+    if (!field) {
+      return this.createError(
+        `${fieldName.toUpperCase()}_FIELD_NOT_FOUND`,
+        `${fieldName} field not found`
+      );
+    }
+
+    try {
+      // Focus the field first
+      await field.focus();
+      await this.randomDelay(500, 800);
+      
+      // Clear the field thoroughly
+      await this.page.keyboard.down('Control');
+      await this.page.keyboard.press('KeyA');
+      await this.page.keyboard.press('Backspace');
+      await this.page.keyboard.up('Control');
+      await this.randomDelay(500, 800);
+      
+      // Type the value once (no retry for combobox)
+      const chars = value.split('');
+      for (const char of chars) {
+        await field.type(char);
+        // Slower typing for combobox fields
+        await this.randomDelay(100, 200);
+      }
+      
+      // Wait for dropdown to appear
+      await this.randomDelay(1000, 1500);
+      
+      // Press down arrow to select first option
+      await this.page.keyboard.press('ArrowDown');
+      await this.randomDelay(300, 500);
+      
+      // Press enter to accept selection
+      await this.page.keyboard.press('Enter');
+      await this.randomDelay(500, 800);
+      
+      logger.info(`${fieldName} combobox filled successfully: ${value}`);
+      return this.createSuccess();
+      
+    } catch (error) {
+      return this.createError(
+        `${fieldName.toUpperCase()}_COMBOBOX_FAILED`,
+        `Failed to fill combobox ${fieldName}: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async fillCountryField(countryName: string): Promise<AutomationResult> {
+    logger.info(`Filling country field with: "${countryName}"`);
+    
+    try {
+      // Add initial pause before starting
+      await this.randomDelay(800, 1200);
+      
+      // 1. Focus on the country field (tab navigation)
+      await this.page.keyboard.press('Tab'); // First tab
+      await this.randomDelay(800, 1200);
+      await this.page.keyboard.press('Tab'); // Second tab to country dropdown
+      await this.randomDelay(800, 1200);
+      
+      // 2. Press enter to open menu
+      logger.info('Opening country dropdown...');
+      await this.page.keyboard.press('Enter');
+      await this.randomDelay(3000, 4000); // 2x longer pause for dropdown to open
+      
+      // 3. Clear any existing content in search field and type country name
+      logger.info('Clearing search field...');
+      await this.randomDelay(2000, 4000);
+      
+      logger.info(`Typing country name: "${countryName}"`);
+      
+      // Type first character and check if it was typed correctly
+      const firstChar = countryName.charAt(0);
+      logger.info(`Typing first character: "${firstChar}"`);
+      await this.page.keyboard.type(firstChar);
+      await this.randomDelay(500, 800);
+      
+      // Verify the first character was typed correctly
+      const firstCharCheck = await this.page.evaluate(() => {
+        const searchField = document.querySelector('input[type="search"]') as HTMLInputElement;
+        return searchField ? searchField.value : '';
+      });
+      
+      logger.info(`After typing first character, field value: "${firstCharCheck}"`);
+      
+      if (firstCharCheck.toLowerCase().includes(firstChar.toLowerCase())) {
+        logger.info('First character typed correctly, continuing with rest of country name...');
+        // Type the rest of the country name
+        const restOfCountry = countryName.substring(1);
+        await this.typeHumanLike(restOfCountry);
+      } else {
+        logger.warn(`First character not typed correctly. Expected: "${firstChar}", Field has: "${firstCharCheck}"`);
+        // Clear and try typing the full country name again
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.press('Backspace');
+        await this.page.keyboard.up('Control');
+        await this.randomDelay(500, 800);
+        
+        await this.typeHumanLike(countryName);
+      }
+      
+      await this.randomDelay(1500, 2000); // Longer pause for search results
+      
+      // 4. Press down arrow to select
+      logger.info('Selecting country from dropdown...');
+      await this.page.keyboard.press('ArrowDown');
+      await this.randomDelay(800, 1200); // Longer pause before confirmation
+      
+      // 5. Press enter to confirm
+      await this.page.keyboard.press('Enter');
+      await this.randomDelay(1000, 1500); // Longer pause after selection
+      
+      logger.info(`Country field filled successfully: ${countryName}`);
+      return this.createSuccess();
+      
+    } catch (error) {
+      return this.createError(
+        'COUNTRY_FIELD_FAILED',
+        `Failed to fill country field: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async verifyAllFieldsFilled(employmentData: any): Promise<AutomationResult> {
+    logger.info('Verifying all employment fields are properly filled...');
+    
+    try {
+      const fieldChecks = await this.page.evaluate((data) => {
+        const results: any = {};
+        
+        // Check title field
+        const titleField = document.querySelector('input[role="combobox"][aria-labelledby="title-label"]') as HTMLInputElement;
+        if (titleField) {
+          results.title = {
+            filled: titleField.value.trim() !== '',
+            value: titleField.value,
+            expected: data.work_title
+          };
+        }
+        
+        // Check company field
+        const companyField = document.querySelector('input[aria-labelledby="company-label"]') as HTMLInputElement;
+        if (companyField) {
+          results.company = {
+            filled: companyField.value.trim() !== '',
+            value: companyField.value,
+            expected: data.work_company_name
+          };
+        }
+        
+        // Check location field
+        const locationField = document.querySelector('input[placeholder*="London"], input[placeholder*="Ex:"]') as HTMLInputElement;
+        if (locationField) {
+          results.location = {
+            filled: locationField.value.trim() !== '',
+            value: locationField.value,
+            expected: 'New York'
+          };
+        }
+        
+        // Check country field
+        const countryField = document.querySelector('input[aria-labelledby*="country"], select[aria-labelledby*="country"]') as HTMLInputElement;
+        if (countryField) {
+          results.country = {
+            filled: countryField.value.trim() !== '',
+            value: countryField.value,
+            expected: 'United States'
+          };
+        }
+        
+        // Check description field
+        const descriptionField = document.querySelector('textarea[aria-labelledby="description-label"]') as HTMLTextAreaElement;
+        if (descriptionField) {
+          results.description = {
+            filled: descriptionField.value.trim() !== '',
+            value: descriptionField.value,
+            expected: data.work_description
+          };
+        }
+        
+        return results;
+      }, employmentData);
+      
+      // Log the verification results
+      let allFieldsFilled = true;
+      const issues: string[] = [];
+      
+      for (const [fieldName, check] of Object.entries(fieldChecks)) {
+        const fieldCheck = check as { filled: boolean; value: string; expected: string };
+        if (!fieldCheck.filled) {
+          allFieldsFilled = false;
+          issues.push(`${fieldName}: empty (expected: ${fieldCheck.expected})`);
+          logger.warn(`Field verification failed - ${fieldName}: empty`);
+        } else {
+          logger.info(`Field verification passed - ${fieldName}: "${fieldCheck.value}"`);
+        }
+      }
+      
+      if (allFieldsFilled) {
+        logger.info('✅ All fields verified and properly filled');
+        return this.createSuccess();
+      } else {
+        logger.warn(`⚠️ Field verification issues: ${issues.join(', ')}`);
+        return this.createError(
+          'FIELDS_NOT_PROPERLY_FILLED',
+          `Some fields are empty or incorrect: ${issues.join(', ')}`
+        );
+      }
+      
+    } catch (error) {
+      logger.warn('Error during field verification:', error);
+      return this.createError(
+        'VERIFICATION_FAILED',
+        `Failed to verify fields: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
   private async fillFieldWithVerification(fieldSelectors: string[], value: string, fieldName: string): Promise<AutomationResult> {
     logger.info(`Filling ${fieldName} field with value: "${value}"`);
     
@@ -160,9 +411,15 @@ export class EmploymentStepHandler extends StepHandler {
         work_description: 'Developed full-stack web applications using modern technologies. Led a team of 5 developers and implemented CI/CD pipelines.'
       };
 
-      // Fill title field using robust field filling
-      logger.info('Filling title field...');
-      const titleResult = await this.fillFieldWithVerification(
+      // Fill title field as a combobox (type once, then select)
+      logger.info('Filling title field as combobox...');
+      
+      // Check if modal is still open before proceeding
+      if (!(await this.ensureModalIsOpen())) {
+        return this.createError('MODAL_CLOSED_DURING_TITLE', 'Modal closed while filling title field');
+      }
+      
+      const titleResult = await this.fillComboboxField(
         ['input[role="combobox"][aria-labelledby="title-label"]', 'input[placeholder*="Software Engineer"]'],
         employmentData.work_title,
         'Title'
@@ -172,12 +429,15 @@ export class EmploymentStepHandler extends StepHandler {
         logger.warn('Title field filling failed, but continuing...');
       }
       
-      // Handle combobox selection for title
-      await this.handleComboboxSelection();
+      // Fill company field as a combobox (type once, then select)
+      logger.info('Filling company field as combobox...');
       
-      // Fill company field using robust field filling
-      logger.info('Filling company field...');
-      const companyResult = await this.fillFieldWithVerification(
+      // Check if modal is still open before proceeding
+      if (!(await this.ensureModalIsOpen())) {
+        return this.createError('MODAL_CLOSED_DURING_COMPANY', 'Modal closed while filling company field');
+      }
+      
+      const companyResult = await this.fillComboboxField(
         ['input[aria-labelledby="company-label"]', 'input[placeholder*="Company"]'],
         employmentData.work_company_name,
         'Company'
@@ -186,12 +446,15 @@ export class EmploymentStepHandler extends StepHandler {
       if (companyResult.status !== 'success') {
         logger.warn('Company field filling failed, but continuing...');
       }
-      
-      // Handle combobox selection for company
-      await this.handleComboboxSelection();
 
       // Fill location field using robust field filling
       logger.info('Filling location field...');
+      
+      // Check if modal is still open before proceeding
+      if (!(await this.ensureModalIsOpen())) {
+        return this.createError('MODAL_CLOSED_DURING_LOCATION', 'Modal closed while filling location field');
+      }
+      
       const locationResult = await this.fillFieldWithVerification(
         ['input[placeholder*="London"]', 'input[placeholder*="Ex:"]'],
         'New York',
@@ -209,42 +472,19 @@ export class EmploymentStepHandler extends StepHandler {
       // Fill country using specific steps
       logger.info('Filling country field...');
       
-      // 1. Navigate to the country field with two tabs
-      await this.page.keyboard.press('Tab'); // First tab
-      await this.randomDelay(800, 1200);
-      await this.page.keyboard.press('Tab'); // Second tab to country dropdown
-      await this.randomDelay(500, 700); // Longer pause before opening dropdown
+      // Add longer pause before starting country field
+      await this.randomDelay(1000, 1500);
       
-      // 2. Press enter to open dropdown
-      logger.info('Opening country dropdown...');
-      await this.page.keyboard.press('Enter');
-      await this.randomDelay(1000, 1500); // Delay after opening dropdown
+      // Check if modal is still open before proceeding
+      if (!(await this.ensureModalIsOpen())) {
+        return this.createError('MODAL_CLOSED_DURING_COUNTRY', 'Modal closed while filling country field');
+      }
       
-      // 3. Press shift+tab to focus search field
-      logger.info('Focusing country search field...');
-      await this.page.keyboard.down('Shift');
-      await this.page.keyboard.press('Tab');
-      await this.page.keyboard.up('Shift');
-      await this.randomDelay(1000, 1500); // Delay before typing
-      
-      // 4. Type the country with verification
-      const countryResult = await this.fillFieldWithVerification(
-        ['input[type="search"]', 'input[placeholder*="Search"]'],
-        'United States',
-        'Country'
-      );
+      const countryResult = await this.fillCountryField('United States');
       
       if (countryResult.status !== 'success') {
         logger.warn('Country field filling failed, but continuing...');
       }
-      
-      await this.randomDelay(300, 600);
-      
-      // 5. Press down + enter to select
-      await this.page.keyboard.press('ArrowDown');
-      await this.randomDelay(150, 300);
-      await this.page.keyboard.press('Enter');
-      await this.randomDelay(300, 600);
 
       // Check "I am currently working in this role" checkbox
       logger.info('Checking currently working checkbox using tab navigation...');
@@ -272,30 +512,33 @@ export class EmploymentStepHandler extends StepHandler {
       await this.page.keyboard.press('Tab'); // Focus start year dropdown
       await this.randomDelay(300, 600);
       
-      logger.info('Filling start year...');
+      logger.info('Filling start year with careful approach...');
       
       // First press enter to open the dropdown
       await this.page.keyboard.press('Enter');
-      await this.randomDelay(1000, 1500);
+      await this.randomDelay(2000, 4000);
       
-      // Type the year with verification
-      const yearResult = await this.fillFieldWithVerification(
-        ['input[type="search"]', 'input[placeholder*="Year"]'],
-        employmentData.work_start_year,
-        'Start Year'
-      );
-      
-      if (yearResult.status !== 'success') {
-        logger.warn('Start year field filling failed, but continuing...');
+      // Type the year very slowly
+      logger.info(`Typing year very slowly: "${employmentData.work_start_year}"`);
+      const yearChars = employmentData.work_start_year.split('');
+      for (const char of yearChars) {
+        await this.page.keyboard.type(char);
+        // Very slow typing for year field
+        await this.randomDelay(300, 500);
       }
       
-      await this.randomDelay(1000, 1500);
+      // Wait longer for search results
+      await this.randomDelay(2000, 4000);
       
-      // Press down and enter to select
+      // Press down arrow to select first option
       await this.page.keyboard.press('ArrowDown');
       await this.randomDelay(800, 1200);
+      
+      // Press enter to accept selection
       await this.page.keyboard.press('Enter');
-      await this.randomDelay(500, 700);
+      await this.randomDelay(1000, 1500);
+      
+      logger.info('Year field filled successfully');
       
       // End year and month disabled if checkbox ticked, so no need to fill them
       
@@ -331,6 +574,13 @@ export class EmploymentStepHandler extends StepHandler {
       await this.randomDelay(700, 1000); // Longer delay after description
 
       this.screenshots.modal_after_fill = await this.takeScreenshot('modal_after_fill');
+
+      // Verify all fields are properly filled before saving
+      logger.info('Verifying all fields are properly filled...');
+      const verificationResult = await this.verifyAllFieldsFilled(employmentData);
+      if (verificationResult.status !== 'success') {
+        logger.warn('Field verification failed, but continuing...');
+      }
 
       // Add extra delay before trying to save
       await this.randomDelay(700, 1000);

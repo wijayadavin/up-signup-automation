@@ -696,6 +696,126 @@ const requestsCmd = command({
   },
 });
 
+// Command to show proxy port statistics
+const proxyPortsCmd = command({
+  name: 'proxy-ports',
+  description: 'Show proxy port statistics and management',
+  args: {
+    action: option({
+      type: string,
+      long: 'action',
+      short: 'a',
+      description: 'Action to perform (stats, used, available, fix-duplicates)',
+      defaultValue: () => 'stats',
+    }),
+  },
+  handler: async (args) => {
+    try {
+      // Run migrations
+      await runMigrations();
+      
+      // Initialize services
+      const { UserService } = await import('./services/userService.js');
+      const userService = new UserService();
+      
+      switch (args.action) {
+        case 'stats':
+          const stats = await userService.getProxyPortStats();
+          logger.info('=== Proxy Port Statistics ===');
+          logger.info(`Total Users: ${stats.totalUsers}`);
+          logger.info(`Users with Proxy Ports: ${stats.usersWithProxyPorts}`);
+          logger.info(`Available Ports: ${stats.availablePorts}/${stats.portRange.max - stats.portRange.min + 1}`);
+          logger.info(`Port Range: ${stats.portRange.min}-${stats.portRange.max}`);
+          logger.info(`Used Ports: [${stats.usedPorts.join(', ')}]`);
+          break;
+          
+        case 'used':
+          const usedPorts = await userService.getUsedProxyPorts();
+          logger.info('=== Used Proxy Ports ===');
+          logger.info(`Used Ports: [${usedPorts.join(', ')}]`);
+          break;
+          
+        case 'available':
+          const availableStats = await userService.getProxyPortStats();
+          const allPorts = Array.from({ length: availableStats.portRange.max - availableStats.portRange.min + 1 }, (_, i) => availableStats.portRange.min + i);
+          const availablePorts = allPorts.filter(port => !availableStats.usedPorts.includes(port));
+          logger.info('=== Available Proxy Ports ===');
+          logger.info(`Available Ports: [${availablePorts.join(', ')}]`);
+          break;
+          
+        case 'fix-duplicates':
+          logger.info('=== Fixing Duplicate Proxy Ports ===');
+          const usersWithPorts = await userService.getUsersWithProxyPorts();
+          const portCounts = new Map<number, number[]>();
+          
+          // Find duplicate ports
+          for (const user of usersWithPorts) {
+            if (user.last_proxy_port !== null) {
+              if (!portCounts.has(user.last_proxy_port)) {
+                portCounts.set(user.last_proxy_port, []);
+              }
+              portCounts.get(user.last_proxy_port)!.push(user.id);
+            }
+          }
+          
+          let fixedCount = 0;
+          for (const [port, userIds] of portCounts) {
+            if (userIds.length > 1) {
+              logger.info(`Found duplicate port ${port} used by users: [${userIds.join(', ')}]`);
+              
+              // Keep the first user, reassign others
+              for (let i = 1; i < userIds.length; i++) {
+                const userId = userIds[i];
+                try {
+                  // Find a unique port for this user
+                  const basePort = 10001;
+                  const maxPort = 10100;
+                  let newPort = null;
+                  
+                  for (let p = basePort; p <= maxPort; p++) {
+                    const isAvailable = await userService.isProxyPortUnique(p);
+                    if (isAvailable) {
+                      newPort = p;
+                      break;
+                    }
+                  }
+                  
+                  if (newPort) {
+                    await userService.updateUserLastProxyPort(userId, newPort);
+                    logger.info(`Reassigned user ${userId} from port ${port} to port ${newPort}`);
+                    fixedCount++;
+                  } else {
+                    logger.error(`No available ports for user ${userId}`);
+                  }
+                } catch (error) {
+                  logger.error(`Failed to fix user ${userId}:`, error);
+                }
+              }
+            }
+          }
+          
+          if (fixedCount === 0) {
+            logger.info('No duplicate proxy ports found');
+          } else {
+            logger.info(`Fixed ${fixedCount} duplicate proxy port assignments`);
+          }
+          break;
+          
+        default:
+          logger.error(`Unknown action: ${args.action}`);
+          process.exit(1);
+      }
+      
+      // Cleanup
+      await closeDatabase();
+      
+    } catch (error) {
+      logger.error(error, 'Failed to manage proxy ports');
+      process.exit(1);
+    }
+  },
+});
+
 // Command to test proxy configuration
 const testProxyCmd = command({
   name: 'test-proxy',
@@ -1924,6 +2044,9 @@ switch (commandName) {
     break;
   case 'requests':
     await run(requestsCmd, commandArgs);
+    break;
+  case 'proxy-ports':
+    await run(proxyPortsCmd, commandArgs);
     break;
   case 'test-proxy':
     await run(testProxyCmd, commandArgs);

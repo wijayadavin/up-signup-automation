@@ -27,21 +27,24 @@ export class ResumeImportStepHandler extends StepHandler {
       await this.waitForPageReady();
       this.screenshots.resume_import_before = await this.takeScreenshot('resume_import_before');
 
+      // ALWAYS try Next button first with 2 attempts (4-6 second waits)
+      logger.info('Trying Next button first with 2 attempts...');
+      const nextResult = await this.tryNextButtonWithRetries();
+      if (nextResult) {
+        this.screenshots.resume_import_after = await this.takeScreenshot('resume_import_after');
+        return nextResult;
+      }
+
+      // Next button didn't work after 2 attempts, continue with usual flow
+      logger.info('Next button attempts failed, continuing with usual flow...');
+
       // Check if we're in upload mode or manual mode
       const isUploadMode = options?.uploadOnly === true;
       logger.info(`Resume import mode: ${isUploadMode ? 'Upload' : 'Manual'}`);
       
       if (isUploadMode) {
-        // Upload mode: try Next button first, then upload if needed
-        logger.info('Upload mode: trying Next button first...');
-        const nextResult = await this.tryNextButtonFirst();
-        if (nextResult) {
-          this.screenshots.resume_import_after = await this.takeScreenshot('resume_import_after');
-          return nextResult;
-        }
-        
-        // Next button not found, proceed with upload
-        logger.info('Upload mode: Next button not found, proceeding with upload...');
+        // Upload mode: proceed with upload
+        logger.info('Upload mode: proceeding with upload...');
         const uploadResult = await this.clickUploadResumeButton();
         if (uploadResult.status !== 'success') {
           return uploadResult;
@@ -71,19 +74,11 @@ export class ResumeImportStepHandler extends StepHandler {
           return manualResult;
         }
 
-        // If manual button not found, try Next button directly (no upload fallback)
-        logger.info('Manual button not found, trying Next button directly...');
-        const nextResult = await this.tryNextButtonFirst();
-        if (nextResult) {
-          this.screenshots.resume_import_after = await this.takeScreenshot('resume_import_after');
-          return nextResult;
-        }
-
-        // If Next button also not found, return error (no upload fallback in manual mode)
-        logger.error('Neither manual button nor Next button found in manual mode');
+        // If manual button not found, return error (no upload fallback in manual mode)
+        logger.error('Manual button not found in manual mode');
         return this.createError(
           'MANUAL_MODE_FAILED',
-          'Manual mode failed: neither "Fill out manually" button nor Next button found'
+          'Manual mode failed: "Fill out manually" button not found'
         );
       }
 
@@ -92,6 +87,65 @@ export class ResumeImportStepHandler extends StepHandler {
         'RESUME_IMPORT_STEP_FAILED',
         `Resume import step failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
+    }
+  }
+
+  private async tryNextButtonWithRetries(): Promise<AutomationResult | null> {
+    try {
+      logger.info('Attempting to find and click Next button with 3 retries...');
+      
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        logger.info(`Next button attempt ${attempt}/2...`);
+        
+        // Look for Next button
+        const nextButton = await this.waitForSelectorWithRetry([
+          'button[data-qa="next-btn"]',
+          'button[data-ev-label="next_btn"]',
+          'button.air3-btn-primary:contains("Next")',
+          'button:contains("Next")',
+          '[role="button"]:contains("Next")',
+          'button.air3-btn:contains("Continue")',
+          'button:contains("Continue")'
+        ], 5000);
+        
+        if (!nextButton) {
+          logger.warn(`Next button not found on attempt ${attempt}/2`);
+          if (attempt < 2) {
+            await this.randomDelay(4000, 6000); // 4-6 second wait before next attempt
+            continue;
+          } else {
+            logger.warn('Next button not found after 2 attempts');
+            return null;
+          }
+        }
+        
+        // Click the Next button
+        logger.info(`Clicking Next button on attempt ${attempt}/2...`);
+        await this.clickElement(nextButton);
+        
+        // Wait 4-6 seconds for potential navigation
+        await this.randomDelay(4000, 6000);
+        
+        // Check if we navigated to a different page
+        const currentUrl = this.page.url();
+        if (!currentUrl.includes('/nx/create-profile/resume-import')) {
+          logger.info(`Successfully navigated away from resume import page on attempt ${attempt}/2. New URL: ${currentUrl}`);
+          return this.createSuccess();
+        } else {
+          logger.warn(`Still on resume import page after attempt ${attempt}/2. Current URL: ${currentUrl}`);
+          if (attempt < 2) {
+            await this.randomDelay(4000, 6000); // 4-6 second wait before next attempt
+            continue;
+          }
+        }
+      }
+      
+      logger.warn('Next button attempts failed - no navigation occurred');
+      return null;
+      
+    } catch (error) {
+      logger.warn(`Next button retry failed: ${error}`);
+      return null;
     }
   }
 

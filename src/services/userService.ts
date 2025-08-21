@@ -374,6 +374,12 @@ export class UserService {
 
   async updateUserLastProxyPort(id: number, proxyPort: number): Promise<User> {
     try {
+      // First check if the proxy port is unique (excluding the current user)
+      const isUnique = await this.isProxyPortUnique(proxyPort, id);
+      if (!isUnique) {
+        throw new Error(`Proxy port ${proxyPort} is already in use by another user`);
+      }
+
       const [user] = await this.db
         .updateTable('users')
         .set({
@@ -437,6 +443,64 @@ export class UserService {
       return users;
     } catch (error) {
       logger.error(error, 'Failed to get users with proxy ports');
+      throw error;
+    }
+  }
+
+  /**
+   * Get all used proxy ports for debugging and management
+   */
+  async getUsedProxyPorts(): Promise<number[]> {
+    try {
+      const users = await this.db
+        .selectFrom('users')
+        .select('last_proxy_port')
+        .where('last_proxy_port', 'is not', null)
+        .execute();
+
+      return users.map(user => user.last_proxy_port!).sort((a, b) => a - b);
+    } catch (error) {
+      logger.error(error, 'Failed to get used proxy ports');
+      throw error;
+    }
+  }
+
+  /**
+   * Get proxy port statistics
+   */
+  async getProxyPortStats(): Promise<{
+    totalUsers: number;
+    usersWithProxyPorts: number;
+    usedPorts: number[];
+    availablePorts: number;
+    portRange: { min: number; max: number };
+  }> {
+    try {
+      const totalUsers = await this.db
+        .selectFrom('users')
+        .select((eb) => eb.fn.countAll().as('count'))
+        .executeTakeFirst();
+
+      const usersWithProxyPorts = await this.db
+        .selectFrom('users')
+        .select((eb) => eb.fn.countAll().as('count'))
+        .where('last_proxy_port', 'is not', null)
+        .executeTakeFirst();
+
+      const usedPorts = await this.getUsedProxyPorts();
+      
+      const portRange = { min: 10001, max: 10100 };
+      const availablePorts = (portRange.max - portRange.min + 1) - usedPorts.length;
+
+      return {
+        totalUsers: Number(totalUsers?.count || 0),
+        usersWithProxyPorts: Number(usersWithProxyPorts?.count || 0),
+        usedPorts,
+        availablePorts,
+        portRange
+      };
+    } catch (error) {
+      logger.error(error, 'Failed to get proxy port stats');
       throw error;
     }
   }

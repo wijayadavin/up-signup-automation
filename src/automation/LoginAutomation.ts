@@ -1,4 +1,4 @@
-import { Page } from 'puppeteer';
+import { Page, ElementHandle } from 'puppeteer';
 import { User } from '../types/database';
 import { BaseAutomation, AutomationResult } from './BaseAutomation';
 import { FormAutomation } from './FormAutomation';
@@ -821,20 +821,25 @@ export class LoginAutomation extends BaseAutomation {
     // Now look for password field
     logger.info('Looking for password field...');
     
-    // Use the specialized password method for better reliability
+    // Use the specialized password method for better reliability with Enter key submission
     return await this.formAutomation.fillPasswordField([
       '#login_password',
       '[aria-label*="Password"]',
       'input[name="login[password]"]',
       'input[type="password"]',
-    ], this.user.password);
+    ], this.user.password, true); // Enable Enter key submission
   }
 
   private async handleCreateProfile(options?: { uploadOnly?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string }): Promise<AutomationResult> {
     logger.info('Handling profile creation...');
     
-    // Submit password form
+    // Simple approach: password is already filled, just use Enter key to submit
+    logger.info('Password already filled, using Enter key to submit...');
     await this.page.keyboard.press('Enter');
+    logger.info('✅ Enter key pressed for password submission');
+    
+    // Wait for the submission to process
+    await this.randomDelay(3000, 5000);
     
     // Wait for verification process to complete
     logger.info('Waiting for password verification and page redirect...');
@@ -843,8 +848,90 @@ export class LoginAutomation extends BaseAutomation {
     // Wait for the page to be fully ready
     await this.waitForPageReady();
     
-    // Additional wait to ensure redirect is complete
-    await this.randomDelay(2000, 3000);
+    // Additional wait to ensure redirect is complete - increased wait time
+    await this.randomDelay(6000, 9000);
+    
+    // Check if we're already on the create profile page (successful redirect)
+    const initialUrl = this.page.url();
+    logger.info(`Current URL after password submission: ${initialUrl}`);
+    
+    if (initialUrl.includes('/nx/create-profile')) {
+      logger.info('✅ Successfully redirected to create profile page!');
+      // Wait for the page to fully load
+      await this.waitForPageReady();
+      await this.randomDelay(2000, 3000);
+      
+      // Skip the complex verification since we're already on the right page
+      logger.info('Skipping complex verification - already on create profile page');
+    }
+    
+    // Check if we're on create profile page
+    let currentUrl = this.page.url();
+    logger.info(`Current URL after password submission: ${currentUrl}`);
+    
+    // If not redirected, try enhanced form submission as fallback
+    if (!currentUrl.includes('/nx/create-profile') && !initialUrl.includes('/nx/create-profile')) {
+      logger.info('Not redirected after password submit, trying enhanced form submission...');
+      
+      // Wait a bit more first
+      await this.randomDelay(2000, 3000);
+      
+      // Try enhanced form submission with multiple methods
+      await this.formAutomation.submitPasswordForm();
+      await this.waitForPageTransition();
+      await this.waitForPageReady();
+      
+      // Check if submission was successful (with error handling for navigation)
+      let submissionSuccess = false;
+      try {
+        submissionSuccess = await this.formAutomation.checkFormSubmissionSuccess();
+        if (submissionSuccess) {
+          logger.info('✅ Form submission appears successful based on indicators');
+        }
+      } catch (error) {
+        logger.warn(`Error checking form submission success: ${error}`);
+        // If we get a navigation error, it might mean the submission worked
+        if (error instanceof Error && error.message.includes('Execution context was destroyed')) {
+          logger.info('Navigation detected during form submission check - likely successful');
+          submissionSuccess = true;
+        }
+      }
+      
+      // Check URL again after enhanced submission
+      currentUrl = this.page.url();
+      logger.info(`URL after enhanced form submission: ${currentUrl}`);
+      
+      // If still not redirected, try one more time with longer wait
+      if (!currentUrl.includes('/nx/create-profile')) {
+        logger.info('Still not redirected, waiting 10 seconds and trying again...');
+        await this.randomDelay(8000, 10000);
+        await this.waitForPageReady();
+        
+        // Try enhanced form submission one more time
+        await this.formAutomation.submitPasswordForm();
+        await this.waitForPageTransition();
+        await this.waitForPageReady();
+        
+        // Check submission success again (with error handling)
+        let retrySubmissionSuccess = false;
+        try {
+          retrySubmissionSuccess = await this.formAutomation.checkFormSubmissionSuccess();
+          if (retrySubmissionSuccess) {
+            logger.info('✅ Form submission appears successful on retry');
+          }
+        } catch (error) {
+          logger.warn(`Error checking form submission success on retry: ${error}`);
+          if (error instanceof Error && error.message.includes('Execution context was destroyed')) {
+            logger.info('Navigation detected during retry form submission check - likely successful');
+            retrySubmissionSuccess = true;
+          }
+        }
+        
+        // Final URL check
+        currentUrl = this.page.url();
+        logger.info(`Final URL after retry: ${currentUrl}`);
+      }
+    }
     
     // Check for captcha and verification error messages with multiple attempts
     let errorDetected = false;
@@ -881,28 +968,110 @@ export class LoginAutomation extends BaseAutomation {
       }
     }
     
-    // Check if we're on create profile page
-    const currentUrl = this.page.url();
-    logger.info(`Current URL after password submission: ${currentUrl}`);
-    
-    if (!currentUrl.includes('/nx/create-profile')) {
+    // Final check if we're on create profile page
+    if (!currentUrl.includes('/nx/create-profile') && !initialUrl.includes('/nx/create-profile')) {
       // Wait a bit more and check again in case redirect is still in progress
       logger.info('Not on create profile page yet, waiting a bit more...');
-      await this.randomDelay(1000, 1700);
+      await this.randomDelay(3000, 5000);
       await this.waitForPageReady();
       
       const retryUrl = this.page.url();
       logger.info(`URL after additional wait: ${retryUrl}`);
       
       if (!retryUrl.includes('/nx/create-profile')) {
-      return this.createError(
-        'NOT_ON_CREATE_PROFILE',
-          `Expected create profile page, got ${retryUrl}`
-        );
+        logger.warn(`Still not on create profile page after extended wait. Current URL: ${retryUrl}`);
+        logger.info('Waiting additional time for potential redirect...');
+        await this.randomDelay(5000, 8000);
+        await this.waitForPageReady();
+        
+        const finalUrl = this.page.url();
+        logger.info(`Final URL check: ${finalUrl}`);
+        
+        if (!finalUrl.includes('/nx/create-profile')) {
+          return this.createError(
+            'NOT_ON_CREATE_PROFILE',
+            `Expected create profile page, got ${finalUrl}`
+          );
+        }
       }
     }
     
     logger.info('Successfully reached create profile page');
+    
+    // Skip verification if we're already on the create profile page
+    if (initialUrl.includes('/nx/create-profile')) {
+      logger.info('Already on create profile page, skipping verification');
+    } else {
+      // Verify we're actually on the create profile page by checking for specific elements
+    let isOnCreateProfilePage = false;
+    try {
+      isOnCreateProfilePage = await this.page.evaluate(() => {
+        const indicators = [
+          window.location.href.includes('/nx/create-profile'),
+          document.querySelector('[data-qa="get-started-btn"]'),
+          document.querySelector('.air3-welcome-page')
+        ];
+        
+        // Check for Welcome text in h1 elements
+        const h1Elements = document.querySelectorAll('h1');
+        const hasWelcomeH1 = Array.from(h1Elements).some(h1 => 
+          h1.textContent?.toLowerCase().includes('welcome')
+        );
+        
+        // Check for Get Started button
+        const buttons = document.querySelectorAll('button');
+        const hasGetStartedButton = Array.from(buttons).some(button => 
+          button.textContent?.toLowerCase().includes('get started')
+        );
+        
+        return indicators.some(Boolean) || hasWelcomeH1 || hasGetStartedButton;
+      });
+    } catch (error) {
+      logger.warn(`Error checking create profile page elements: ${error}`);
+      if (error instanceof Error && error.message.includes('Execution context was destroyed')) {
+        logger.info('Navigation detected during page verification - page is likely still loading');
+        // If we get a navigation error, assume the page is still loading and continue
+        isOnCreateProfilePage = true;
+      }
+    }
+    
+    if (!isOnCreateProfilePage) {
+      logger.warn('URL indicates create profile page but page elements not found, waiting longer...');
+      await this.randomDelay(5000, 8000);
+      await this.waitForPageReady();
+      
+      // Final verification
+      let finalVerification = false;
+      try {
+        finalVerification = await this.page.evaluate(() => {
+          const hasGetStartedBtn = document.querySelector('[data-qa="get-started-btn"]') !== null;
+          
+          // Check for Welcome text in h1 elements
+          const h1Elements = document.querySelectorAll('h1');
+          const hasWelcomeH1 = Array.from(h1Elements).some(h1 => 
+            h1.textContent?.toLowerCase().includes('welcome')
+          );
+          
+          return window.location.href.includes('/nx/create-profile') && 
+                 (hasGetStartedBtn || hasWelcomeH1);
+        });
+      } catch (error) {
+        logger.warn(`Error during final verification: ${error}`);
+        if (error instanceof Error && error.message.includes('Execution context was destroyed')) {
+          logger.info('Navigation detected during final verification - page is likely still loading');
+          // If we get a navigation error, assume the page is still loading and continue
+          finalVerification = true;
+        }
+      }
+      
+      if (!finalVerification) {
+        return this.createError(
+          'CREATE_PROFILE_PAGE_NOT_READY',
+          'Create profile page elements not found after extended wait'
+        );
+      }
+    }
+    }
     
     // Save session state after successful login
     try {

@@ -80,7 +80,8 @@ export class BaseAutomation {
     const chars = text.split('');
     for (const char of chars) {
       await this.page.keyboard.type(char);
-      await this.randomDelay(30, 100);
+      // Make typing 2x slower (60-200ms instead of 30-100ms)
+      await this.randomDelay(60, 200);
     }
   }
 
@@ -99,6 +100,72 @@ export class BaseAutomation {
       // Navigation might have already completed
       logger.debug(`Navigation timeout after 15 seconds: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  // Finding utility (replaces invalid CSS selectors)
+  protected async findButtonByText(buttonTexts: string[]): Promise<ElementHandle<any> | null> {
+    try {
+      const button = await this.page.evaluateHandle((texts) => {
+        const buttons = document.querySelectorAll('button');
+        for (const button of buttons) {
+          const buttonText = button.textContent?.trim().toLowerCase();
+          if (texts.some(text => buttonText?.includes(text.toLowerCase()))) {
+            const rect = button.getBoundingClientRect();
+            const isVisible = rect.width > 0 && rect.height > 0;
+            const isEnabled = !button.hasAttribute('disabled');
+            const isClickable = (button as HTMLElement).offsetParent !== null;
+            
+            if (isVisible && isEnabled && isClickable) {
+              return button;
+            }
+          }
+        }
+        return null;
+      }, buttonTexts);
+      
+      if (button) {
+        const element = button.asElement();
+        return element;
+      }
+      return null;
+    } catch (error) {
+      logger.warn(`Error finding button by text ${buttonTexts.join(', ')}:`, error);
+      return null;
+    }
+  }
+
+  // Robust button finding with multiple strategies
+  protected async findButtonRobust(selectors: string[], buttonTexts: string[]): Promise<ElementHandle<any> | null> {
+    // First try specific selectors
+    for (const selector of selectors) {
+      try {
+        const element = await this.page.$(selector);
+        if (element) {
+          // Verify it's a button and is clickable
+          const isClickable = await this.page.evaluate((el) => {
+            const rect = el.getBoundingClientRect();
+            const isVisible = rect.width > 0 && rect.height > 0;
+            const isEnabled = !el.hasAttribute('disabled');
+            const isClickable = (el as HTMLElement).offsetParent !== null;
+            return isVisible && isEnabled && isClickable;
+          }, element);
+          
+          if (isClickable) {
+            logger.debug(`Found button with selector: ${selector}`);
+            return element;
+          }
+        }
+      } catch (error) {
+        // Continue to next selector
+      }
+    }
+    
+    // Then try text-based selection
+    if (buttonTexts.length > 0) {
+      return await this.findButtonByText(buttonTexts);
+    }
+    
+    return null;
   }
 
   // Wait for page transition after form submission
@@ -157,14 +224,14 @@ export class BaseAutomation {
   protected async clearAndType(element: ElementHandle<Element>, text: string): Promise<void> {
     // Focus and clear
     await element.focus();
-    await this.randomDelay(150, 300); // Wait for focus to be established
+    await this.randomDelay(300, 500); // Wait longer for focus to be established
     
     // Clear the field more thoroughly
     await this.page.keyboard.down('Control');
     await this.page.keyboard.press('KeyA');
     await this.page.keyboard.up('Control');
     await this.page.keyboard.press('Backspace');
-    await this.randomDelay(150, 300);
+    await this.randomDelay(300, 500);
     
     // Verify field is empty before typing
     const currentValue = await element.evaluate((el: Element) => (el as HTMLInputElement).value);
@@ -173,14 +240,23 @@ export class BaseAutomation {
       await element.evaluate((el: Element) => {
         (el as HTMLInputElement).value = '';
       });
-      await this.randomDelay(100, 200);
+      await this.randomDelay(200, 400);
     }
     
-    // Type new text
+    // Type new text with slower typing
     await this.typeHumanLike(text);
     
-    // Wait a bit after typing to ensure the value is set
-    await this.randomDelay(200, 400);
+    // Wait longer after typing to ensure the value is set
+    await this.randomDelay(500, 800);
+    
+    // Additional verification - check if the value was actually entered
+    const finalValue = await element.evaluate((el: Element) => (el as HTMLInputElement).value);
+    if (!finalValue || finalValue.trim() === '') {
+      logger.warn('Field appears empty after typing, trying one more time...');
+      // Try typing again
+      await this.typeHumanLike(text);
+      await this.randomDelay(500, 800);
+    }
   }
 
   // Error handling utilities
