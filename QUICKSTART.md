@@ -32,10 +32,10 @@
    PUPPETEER_USER_DATA_DIR=./user-data
    UPWORK_LOGIN_URL=https://www.upwork.com/ab/account-security/login
    ```
-
-4. **Start PostgreSQL with Docker:**
+4. *Run docker compose to set up PostgreSQL:*
+   From the project root directory, run:
    ```bash
-   npm run db:up
+   docker compose up -d
    ```
 
 5. **Run migrations:**
@@ -47,6 +47,11 @@
    ```bash
    npm run setup
    ```
+6. Build the project
+```bash
+npm run build
+```
+
 
 ## Test the Login Page Visit
 
@@ -80,6 +85,17 @@ npm start add-user \
   --country-code "US"
 ```
 
+Or add bulk from CSV:
+```bash
+npm start import-csv -- --file data/mock_users.csv
+```
+
+## Production mode
+To run all automation, simply run this command below
+```bash
+npm start process-users -- --restore-session --retry
+```
+TODO: need to test to scale it up and make it more reliable
 ## View Statistics
 
 ```bash
@@ -125,14 +141,6 @@ src/
 - Structured logging with Pino
 - Error tracking
 - Statistics
-
-## Next Steps
-
-1. Test the login page visit
-2. Add users to the database
-3. Implement full sign-up automation
-4. Add proxy support
-5. Implement captcha handling
 
 ## Troubleshooting
 

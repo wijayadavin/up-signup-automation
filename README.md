@@ -2,117 +2,15 @@
 
 A robust puppeteer-based sign-up automation tool for Upwork with PostgreSQL database integration.
 
-## Features
-
-- **Robust Browser Automation**: Uses puppeteer-extra with stealth plugins to avoid detection
-- **PostgreSQL Database**: Stores user data and automation progress with comprehensive tracking
-- **Complete Profile Creation Workflow**: Full 16-step Upwork profile creation process:
-  - **Pre-Onboarding Steps**: Welcome, experience selection, work goals, preferences
-  - **Core Profile Steps**: Resume import, categories, skills, title, employment, education
-  - **Final Steps**: Languages, overview, rate, location with phone verification
-- **Real OTP Integration**: TextVerified.com API integration for phone verification
-- **Smart Session Management**: Automatic session saving/restoration with error handling
-- **Comprehensive Error Handling**: Captcha detection, network error recovery, graceful fallbacks
-- **Human-like Behavior**: Random delays, realistic typing patterns, natural navigation
-- **Robust Element Detection**: Multiple selector strategies with text-based fallbacks
-- **Screenshot Capture**: Automatic debugging screenshots at each step
-- **CSV Import/Export**: Bulk user management with database-aligned headers
-- **Proxy Support**: Decodo residential proxy with user-specific port allocation
-- **CLI Interface**: Intuitive command-line interface with extensive options
-
-## Database Schema
-
-The application uses a `users` table with the following structure:
-
-```sql
-CREATE TABLE users (
-  id SERIAL PRIMARY KEY,
-  first_name VARCHAR(255) NOT NULL,
-  last_name VARCHAR(255) NOT NULL,
-  email VARCHAR(255) NOT NULL UNIQUE,
-  password VARCHAR(255) NOT NULL,
-  country_code VARCHAR(10) NOT NULL,
-  last_attempt_at TIMESTAMP,
-  attempt_count INTEGER NOT NULL DEFAULT 0,
-  last_error_code VARCHAR(100),
-  last_error_message TEXT,
-  success_at TIMESTAMP,
-  captcha_flagged_at TIMESTAMP,
-  up_created_at TIMESTAMP,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-```
-
 ## Prerequisites
 
 - Node.js 18+ 
-- PostgreSQL database
 - Chrome/Chromium browser
-- **Google Chrome** (for headful mode with `--headful` flag)
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd up-crawler
-```
-
-2. Install dependencies:
-```bash
-npm install
-```
-
-3. Set up environment variables:
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your database configuration:
-```env
-DATABASE_URL=postgresql://username:password@localhost:5432/up_crawler
-LOG_LEVEL=info
-PUPPETEER_HEADLESS=false
-PUPPETEER_TIMEOUT=30000
-PUPPETEER_USER_DATA_DIR=./user-data
-UPWORK_LOGIN_URL=https://www.upwork.com/ab/account-security/login
-```
-
-4. Create the database:
-```sql
-CREATE DATABASE up_crawler;
-```
-
-5. Run migrations:
-```bash
-npm run migrate
-```
-
-6. (Optional) Install Google Chrome for headful mode:
-```bash
-# For Ubuntu/Debian systems
-wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-sudo apt update
-sudo apt install google-chrome-stable -y
-
-# For other systems, download from https://www.google.com/chrome/
-```
+- Docker & Docker Compose
 
 ## Usage
 
-### Run docker compose
-From the project root directory, run:
-```bash
-docker compose up -d
-```
-
-
-### Build the project
-```bash
-npm run build
-```
+See [QUICKSTART.md](QUICKSTART.md) for more details
 
 ### Available Commands
 
@@ -167,14 +65,6 @@ npm start visit-login --keep-open  # ❌ Wrong (missing --)
 ```bash
 # Direct execution (no npm start needed):
 node dist/main.js visit-login --debug --headless
-node dist/main.js visit-login --keep-open
-node dist/main.js process-users --limit 5 --headless
-node dist/main.js process-users --user-id 19 --restore-session
-node dist/main.js process-users --upload --no-stealth
-node dist/main.js process-users --restore-session --no-stealth
-node dist/main.js process-users --skip-otp
-node dist/main.js restore-session --user-id 1 --headful
-node dist/main.js wait-otp --user-id 1 --timeout 60
 ```
 
 ### Visit Login Page
@@ -218,36 +108,6 @@ npm start -- visit-login --user-id 6 --keep-open
   - `debug-unknown-page-*.png`: When on unexpected page
 - **No Automation**: Use `process-users` command for actual login automation
 
-### Test Resume Generation
-Test the PDF resume generation functionality without browser automation:
-
-```bash
-# Generate resume for first available user
-npm start test-resume
-
-# Generate resume for specific user ID
-npm start test-resume -- --user-id 1
-
-# Generate resume for specific user email
-npm start test-resume -- --email user@example.com
-
-# Generate both PDF and plain text versions
-npm start test-resume -- --plain-text
-
-# Custom output directory
-npm start test-resume -- --output ./my-resumes
-
-# Complete example with all options
-npm start test-resume -- --user-id 1 --plain-text --output ./test-output
-```
-
-**Features:**
-- Generates ATS-friendly PDF resume using user data from database
-- Optional plain text version for copy/paste scenarios
-- File size validation (warns if too small/large for ATS)
-- Customizable output directory
-- Works with user ID, email, or first available user
-
 ### Process Users with Full Login Automation
 Run the complete login automation for pending users:
 
@@ -261,14 +121,8 @@ npm start process-users -- --limit 1
 # Run in headless mode
 npm start process-users -- --headless
 
-# Test resume upload mode (handles file upload instead of manual form filling)
-npm start process-users -- --upload
-
-# Test resume upload in headless mode
-npm start process-users -- --upload --headless
-
 # Test resume upload with no-stealth mode for debugging
-npm start process-users -- --upload --no-stealth
+npm start process-users -- --no-stealth
 ```
 
 The automation includes:
