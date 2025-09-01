@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc && node scripts/fix-imports.js",
     "start": "node dist/main.js",
-    "start:upwork": "node dist/main.js upwork",
+    "start:upwork": "node dist/upwork.js --pages 25 --out out/jobs.json",
     "start:turnstile": "node dist/main.js turnstile --out out/turnstile_results.json",
     "dev": "tsx src/main.ts",
     "migrate": "tsx src/migrate.ts",

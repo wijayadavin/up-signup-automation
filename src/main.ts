@@ -13,7 +13,6 @@ import { ResumeGenerator } from './utils/resumeGenerator.js';
 import { SessionService } from './services/sessionService.js';
 // import { TextVerifiedService } from './services/textVerifiedService.js';
 import fs from 'fs';
-import { runUpwork } from './upwork.js';
 
 // Load environment variables
 dotenv.config();
@@ -1984,97 +1983,7 @@ const retryAllFailedCmd = command({
   }
 });
 
-const upworkCmd = command({
-  name: 'upwork',
-  description: 'Process pending users for sign-up automation (duplicate of process-users)',
-  args: {
-    userId: option({
-      type: number,
-      long: 'user-id',
-      description: 'Process only a specific user by ID (overrides limit)',
-      defaultValue: () => 0,
-    }),
-    limit: option({
-      type: number,
-      long: 'limit',
-      short: 'l',
-      description: 'Maximum number of users to process',
-      defaultValue: () => 5,
-    }),
-    headless: flag({
-      type: boolean,
-      long: 'headless',
-      short: 'h',
-      description: 'Run browser in headless mode',
-      defaultValue: () => false,
-    }),
-    upload: flag({
-      type: boolean,
-      long: 'upload',
-      short: 'u',
-      description: 'Test upload mode: only run until Step 4 (Resume Import)',
-      defaultValue: () => false,
-    }),
-    noStealth: flag({
-      type: boolean,
-      long: 'no-stealth',
-      short: 's',
-      description: 'Disable stealth mode for debugging (use normal browser behavior)',
-      defaultValue: () => false,
-    }),
-    restoreSession: flag({
-      type: boolean,
-      long: 'restore-session',
-      short: 'r',
-      description: 'Restore existing session instead of starting from login',
-      defaultValue: () => false,
-    }),
-    skipOtp: flag({
-      type: boolean,
-      long: 'skip-otp',
-      description: 'Skip location step (except profile picture) and redirect to submit page',
-      defaultValue: () => false,
-    }),
-    skipLocation: flag({
-      type: boolean,
-      long: 'skip-location',
-      description: 'Skip the location page and mark rate step as completed',
-      defaultValue: () => false,
-    }),
-    step: option({
-      type: string,
-      long: 'step',
-      description: 'Force start from a specific step (e.g., "employment")',
-      defaultValue: () => '',
-    }),
-    retry: flag({
-      type: boolean,
-      long: 'retry',
-      description: 'Retry users flagged with captcha after all other users are completed',
-      defaultValue: () => false,
-    }),
-  },
-  handler: async (args) => {
-    try {
-      await runUpwork({
-        userId: args.userId > 0 ? args.userId : undefined,
-        limit: args.limit,
-        headless: args.headless,
-        upload: args.upload,
-        noStealth: args.noStealth,
-        restoreSession: args.restoreSession,
-        skipOtp: args.skipOtp,
-        skipLocation: args.skipLocation,
-        step: args.step,
-        retry: args.retry,
-      });
-    } catch (error) {
-      const logger = getLogger(import.meta.url);
-      logger.error(error, 'Failed to run upwork command');
-      process.exit(1);
-    }
-  },
-});
+
 
 // Main command with subcommands
 const mainCmd = command({
@@ -2120,9 +2029,6 @@ if (commandName === 'visit-login' && commandArgs.length > 0 && !commandArgs[0].s
 }
 
 switch (commandName) {
-  case 'upwork':
-    await run(upworkCmd, commandArgs);
-    break;
   case 'visit-login':
     await run(visitLoginPageCmd, commandArgs);
     break;
