@@ -4,17 +4,13 @@ import { existsSync } from 'fs';
 import { resolve } from 'path';
 import dotenv from 'dotenv';
 import { Solver } from '2captcha';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { BrowserManager } from './browser/browserManager.js';
 import { getLogger } from './utils/logger.js';
 
 const logger = getLogger(import.meta.url);
 
 // Load environment variables
 dotenv.config();
-
-// Add stealth plugin
-puppeteer.use(StealthPlugin());
 
 interface TurnstileAttempt {
   site: string;
@@ -85,6 +81,20 @@ const turnstileCmd = command({
       short: 'c',
       description: 'Focus on challenge site only',
       defaultValue: () => false
+    }),
+    noProxy: flag({
+      type: boolean,
+      long: 'no-proxy',
+      short: 'n',
+      description: 'Disable proxy and use direct connection',
+      defaultValue: () => true
+    }),
+    noStealth: flag({
+      type: boolean,
+      long: 'no-stealth',
+      short: 's',
+      description: 'Disable stealth mode for debugging (use normal browser behavior)',
+      defaultValue: () => false
     })
   },
   handler: async (args) => {
@@ -99,6 +109,8 @@ export async function runTurnstileSolver(args: {
   apiKey: string;
   headless: boolean;
   challenge: boolean;
+  noProxy: boolean;
+  noStealth: boolean;
 }) {
   const startTime = Date.now();
   const attempts: TurnstileAttempt[] = [];
@@ -120,23 +132,29 @@ export async function runTurnstileSolver(args: {
   logger.info(`API Key: ${args.apiKey.substring(0, 8)}...`);
   logger.info(`Timeout: ${args.timeout}s per attempt`);
   logger.info(`Headless: ${args.headless}`);
+  logger.info(`Proxy enabled: ${!args.noProxy}`);
+  logger.info(`Stealth mode: ${!args.noStealth}`);
+  logger.info(`Challenge mode: ${args.challenge}`);
 
   // Initialize 2captcha solver
   const solver = new Solver(args.apiKey);
 
-  // Launch browser
-  const browser = await puppeteer.launch({
+  // Initialize browser manager with proxy support
+  const browserManager = new BrowserManager({
     headless: args.headless,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu'
-    ]
+    skipProxyTest: args.noProxy, // Skip proxy if noProxy flag is set
+    disableTrackingProtection: args.noStealth // Disable tracking protection if noStealth is set
   });
+
+  // Launch browser
+  const browser = await browserManager.launch();
+  
+  // If noStealth is enabled, we need to override the stealth plugin
+  if (args.noStealth) {
+    logger.info('Stealth mode disabled - using normal browser behavior');
+    // The BrowserManager already handles this through disableTrackingProtection
+    // but we can add additional logging to confirm
+  }
 
   try {
     for (const site of demoSites) {
@@ -187,7 +205,7 @@ export async function runTurnstileSolver(args: {
     }
     
   } finally {
-    await browser.close();
+    await browserManager.close();
   }
 
   // Generate summaries
@@ -218,7 +236,7 @@ async function solveTurnstileChallenge(
     // Set viewport
     await page.setViewport({ width: 1280, height: 720 });
     
-    // Inject the interception script for challenge sites
+    // Inject the interception script for challenge sites (following 2captcha docs exactly)
     if (siteUrl.includes('cloudflare-turnstile-challenge')) {
       await page.evaluateOnNewDocument(() => {
         console.clear = () => console.log('Console was cleared');
@@ -243,14 +261,81 @@ async function solveTurnstileChallenge(
           }
         }, 50);
       });
+      
+      // Alternative approach: Intercept api.js requests and replace with custom script
+      await page.setRequestInterception(true);
+      page.on('request', (request: any) => {
+        if (request.url().includes('api.js') && request.url().includes('challenges.cloudflare.com')) {
+          logger.info('Intercepting api.js request, replacing with custom script');
+          request.respond({
+            status: 200,
+            contentType: 'application/javascript',
+            body: `
+              // Custom api.js replacement
+              window.turnstile = {
+                render: function(container, options) {
+                  let params = {
+                    sitekey: options.sitekey,
+                    pageurl: window.location.href,
+                    data: options.cData,
+                    pagedata: options.chlPageData,
+                    action: options.action,
+                    userAgent: navigator.userAgent,
+                    json: 1,
+                  };
+                  console.log('intercepted-params:' + JSON.stringify(params));
+                  window.cfCallback = options.callback;
+                }
+              };
+            `
+          });
+        } else {
+          request.continue();
+        }
+      });
     }
     
     // Navigate to the site
     logger.info(`Navigating to: ${siteUrl}`);
     await page.goto(siteUrl, { waitUntil: 'networkidle2', timeout: 30000 });
     
-    // Wait for the page to load
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Wait for the page to be fully loaded
+    logger.info('Waiting for page to be fully loaded...');
+    
+    // Wait for DOM to be ready
+    await page.waitForFunction(() => {
+      return document.readyState === 'complete';
+    }, { timeout: 10000 });
+    
+    // Additional wait for dynamic content
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // For challenge sites, wait for Turnstile widget to be present
+    if (siteUrl.includes('cloudflare-turnstile-challenge')) {
+      logger.info('Waiting for Turnstile widget to load...');
+      try {
+        // Wait for either the turnstile iframe or the turnstile div
+        await page.waitForFunction(() => {
+          const iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+          const turnstileDiv = document.querySelector('.cf-turnstile');
+          return iframe || turnstileDiv;
+        }, { timeout: 15000 });
+        logger.info('Turnstile widget detected');
+      } catch (error) {
+        logger.warn('Turnstile widget not found, continuing anyway...');
+      }
+    }
+    
+    // For regular sites, wait for the cf-turnstile div
+    else {
+      logger.info('Waiting for cf-turnstile div...');
+      try {
+        await page.waitForSelector('.cf-turnstile', { timeout: 10000 });
+        logger.info('cf-turnstile div found');
+      } catch (error) {
+        logger.warn('cf-turnstile div not found, continuing anyway...');
+      }
+    }
     
     // Set up console message listener for challenge sites
     let interceptedParams: any = null;
@@ -258,8 +343,13 @@ async function solveTurnstileChallenge(
       page.on('console', async (msg: any) => {
         const txt = msg.text();
         if (txt.includes('intercepted-params:')) {
-          interceptedParams = JSON.parse(txt.replace('intercepted-params:', ''));
-          logger.info('Intercepted turnstile parameters:', interceptedParams);
+          try {
+            const params = JSON.parse(txt.replace('intercepted-params:', ''));
+            logger.info('Intercepted turnstile parameters:', params);
+            interceptedParams = params;
+          } catch (error) {
+            logger.error('Failed to parse intercepted parameters:', error);
+          }
         }
       });
     }
@@ -303,17 +393,43 @@ async function solveTurnstileChallenge(
         logger.warn('Turnstile iframe not found, continuing anyway...');
       }
       
+      // Wait for parameters with better logging and more robust detection
       let attempts = 0;
-      while (!interceptedParams && attempts < 150) {
+      const maxAttempts = 200; // Increased from 150
+      while (!interceptedParams && attempts < maxAttempts) {
         await new Promise(resolve => setTimeout(resolve, 100));
         attempts++;
-        if (attempts % 10 === 0) {
-          logger.info(`Still waiting for parameters... (${attempts}/150)`);
+        
+        // Log progress every 20 attempts
+        if (attempts % 20 === 0) {
+          logger.info(`Waiting for parameters... (${attempts}/${maxAttempts}) - ${(attempts/maxAttempts*100).toFixed(1)}%`);
+          
+          // Check if turnstile is available and try to trigger it
+          const turnstileAvailable = await page.evaluate(() => {
+            return !!(window as any).turnstile;
+          });
+          
+          if (turnstileAvailable && attempts > 50) {
+            logger.info('Turnstile object found, attempting to trigger render...');
+            await page.evaluate(() => {
+              const turnstileDiv = document.querySelector('.cf-turnstile');
+              if (turnstileDiv && (window as any).turnstile) {
+                (window as any).turnstile.render(turnstileDiv, {
+                  sitekey: '0x4AAAAAAAD7Dju0CMHhJHhh',
+                  callback: (token: string) => {
+                    console.log('Manual callback triggered with token:', token);
+                  }
+                });
+              }
+            });
+          }
         }
       }
       
       if (!interceptedParams) {
-        // Try to manually trigger the turnstile render
+        logger.warn('Failed to intercept parameters after maximum attempts, trying fallbacks...');
+        
+        // FALLBACK 1: Try to manually trigger the turnstile render
         logger.info('Attempting to manually trigger turnstile render...');
         await page.evaluate(() => {
           const turnstileDiv = document.querySelector('.cf-turnstile');
@@ -331,11 +447,72 @@ async function solveTurnstileChallenge(
         await new Promise(resolve => setTimeout(resolve, 5000));
         
         if (!interceptedParams) {
-          throw new Error('Failed to intercept turnstile parameters after manual trigger');
+          // FALLBACK 2: Try to extract parameters from the page directly
+          logger.info('Attempting to extract parameters from page directly...');
+          const extractedParams = await page.evaluate(() => {
+            // Look for any script tags that might contain turnstile configuration
+            const scripts = document.querySelectorAll('script');
+            for (const script of scripts) {
+              const content = script.textContent || '';
+              if (content.includes('turnstile') && content.includes('sitekey')) {
+                // Try to extract sitekey from script content
+                const sitekeyMatch = content.match(/sitekey['"]?\s*:\s*['"]([^'"]+)['"]/);
+                if (sitekeyMatch) {
+                  return {
+                    sitekey: sitekeyMatch[1],
+                    pageurl: window.location.href,
+                    data: '',
+                    pagedata: '',
+                    action: 'verify',
+                    userAgent: navigator.userAgent,
+                    json: 1,
+                  };
+                }
+              }
+            }
+            
+            // Look for data attributes on turnstile elements
+            const turnstileElement = document.querySelector('.cf-turnstile, [data-sitekey]');
+            if (turnstileElement) {
+              const sitekey = turnstileElement.getAttribute('data-sitekey');
+              if (sitekey) {
+                return {
+                  sitekey,
+                  pageurl: window.location.href,
+                  data: '',
+                  pagedata: '',
+                  action: 'verify',
+                  userAgent: navigator.userAgent,
+                  json: 1,
+                };
+              }
+            }
+            
+            return null;
+          });
+          
+          if (extractedParams) {
+            interceptedParams = extractedParams;
+            logger.info('Extracted parameters from page:', interceptedParams);
+          } else {
+            // FALLBACK 3: Use a known sitekey for the demo page
+            logger.info('Using fallback sitekey for demo page...');
+            interceptedParams = {
+              sitekey: '0x4AAAAAAAD7Dju0CMHhJHhh',
+              pageurl: siteUrl,
+              data: '',
+              pagedata: '',
+              action: 'verify',
+              userAgent: await page.evaluate(() => navigator.userAgent),
+              json: 1,
+            };
+          }
         }
       }
       
       logger.info('Solving challenge with intercepted parameters...');
+      // For challenge sites, use turnstile method with intercepted parameters
+      // Use the basic turnstile method with sitekey and pageurl
       result = await solver.turnstile(interceptedParams.sitekey, interceptedParams.pageurl);
     } else {
       // For regular sites, look for the cf-turnstile div with data-sitekey attribute
@@ -364,13 +541,23 @@ async function solveTurnstileChallenge(
     
     logger.info(`Challenge solved, token: ${result.data.substring(0, 50)}...`);
     
-    // Execute the token in the page
+    // Execute the token in the page (following 2captcha docs exactly)
     await page.evaluate((token: string, isChallengeSite: boolean) => {
       if (isChallengeSite) {
-        // For challenge sites, execute the callback directly
+        // For challenge sites, execute the callback directly as per docs
         if ((window as any).cfCallback) {
           (window as any).cfCallback(token);
           console.log('Challenge callback executed with token');
+        } else {
+          // Fallback: try to find and execute any callback function
+          const callbacks = Object.keys(window).filter(key => key.toLowerCase().includes('callback'));
+          for (const callbackName of callbacks) {
+            if (typeof (window as any)[callbackName] === 'function') {
+              (window as any)[callbackName](token);
+              console.log(`Executed callback: ${callbackName}`);
+              break;
+            }
+          }
         }
       } else {
         // For regular sites, set the token in inputs

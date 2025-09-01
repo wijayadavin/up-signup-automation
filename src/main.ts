@@ -2118,7 +2118,9 @@ switch (commandName) {
       timeout: commandArgs.includes('--timeout') ? parseInt(commandArgs[commandArgs.indexOf('--timeout') + 1]) : 90,
       apiKey: commandArgs.includes('--api-key') ? commandArgs[commandArgs.indexOf('--api-key') + 1] : (process.env.CAPTCHA_API_KEY || ''),
       headless: !commandArgs.includes('--no-headless'),
-      challenge: commandArgs.includes('--challenge')
+      challenge: commandArgs.includes('--challenge'),
+      noProxy: commandArgs.includes('--no-proxy'),
+      noStealth: commandArgs.includes('--no-stealth')
     });
     break;
   default:

@@ -3,33 +3,33 @@
     {
       "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
       "attempt": 1,
-      "startedAt": "2025-09-01T20:11:26.295Z",
-      "durationMs": 13091,
+      "startedAt": "2025-09-01T20:48:51.038Z",
+      "durationMs": 585,
       "status": "failure",
-      "errorMessage": "Failed to intercept turnstile parameters"
+      "errorMessage": "net::ERR_INVALID_AUTH_CREDENTIALS at https://2captcha.com/demo/cloudflare-turnstile-challenge"
     },
     {
       "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
       "attempt": 2,
-      "startedAt": "2025-09-01T20:11:41.391Z",
-      "durationMs": 13598,
+      "startedAt": "2025-09-01T20:48:53.630Z",
+      "durationMs": 221,
       "status": "failure",
-      "errorMessage": "Failed to intercept turnstile parameters"
+      "errorMessage": "net::ERR_INVALID_AUTH_CREDENTIALS at https://2captcha.com/demo/cloudflare-turnstile-challenge"
     }
   ],
   "summary": {
     "totalAttempts": 2,
     "totalSuccesses": 0,
     "overallSuccessRate": 0,
-    "totalDurationMs": 26689,
+    "totalDurationMs": 806,
     "siteSummaries": {
       "https://2captcha.com/demo/cloudflare-turnstile-challenge": {
         "attempts": 2,
         "successes": 0,
         "successRate": 0,
-        "avgDurationMs": 13344.5
+        "avgDurationMs": 403
       }
     }
   },
-  "generatedAt": "2025-09-01T20:11:55.231Z"
+  "generatedAt": "2025-09-01T20:48:55.097Z"
 }
