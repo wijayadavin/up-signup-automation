@@ -1,0 +1,35 @@
+{
+  "attempts": [
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 1,
+      "startedAt": "2025-09-01T20:11:26.295Z",
+      "durationMs": 13091,
+      "status": "failure",
+      "errorMessage": "Failed to intercept turnstile parameters"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 2,
+      "startedAt": "2025-09-01T20:11:41.391Z",
+      "durationMs": 13598,
+      "status": "failure",
+      "errorMessage": "Failed to intercept turnstile parameters"
+    }
+  ],
+  "summary": {
+    "totalAttempts": 2,
+    "totalSuccesses": 0,
+    "overallSuccessRate": 0,
+    "totalDurationMs": 26689,
+    "siteSummaries": {
+      "https://2captcha.com/demo/cloudflare-turnstile-challenge": {
+        "attempts": 2,
+        "successes": 0,
+        "successRate": 0,
+        "avgDurationMs": 13344.5
+      }
+    }
+  },
+  "generatedAt": "2025-09-01T20:11:55.231Z"
+}

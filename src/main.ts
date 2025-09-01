@@ -13,6 +13,7 @@ import { ResumeGenerator } from './utils/resumeGenerator.js';
 import { SessionService } from './services/sessionService.js';
 // import { TextVerifiedService } from './services/textVerifiedService.js';
 import fs from 'fs';
+import { runTurnstileSolver } from './turnstile.js';
 
 // Load environment variables
 dotenv.config();
@@ -2109,6 +2110,16 @@ switch (commandName) {
     break;
   case 'retry-all-failed':
     await run(retryAllFailedCmd, commandArgs);
+    break;
+  case 'turnstile':
+    await runTurnstileSolver({
+      output: commandArgs.includes('--out') ? commandArgs[commandArgs.indexOf('--out') + 1] : 'out/turnstile_results.json',
+      attempts: commandArgs.includes('--attempts') ? parseInt(commandArgs[commandArgs.indexOf('--attempts') + 1]) : 10,
+      timeout: commandArgs.includes('--timeout') ? parseInt(commandArgs[commandArgs.indexOf('--timeout') + 1]) : 90,
+      apiKey: commandArgs.includes('--api-key') ? commandArgs[commandArgs.indexOf('--api-key') + 1] : (process.env.CAPTCHA_API_KEY || ''),
+      headless: !commandArgs.includes('--no-headless'),
+      challenge: commandArgs.includes('--challenge')
+    });
     break;
   default:
     await run(mainCmd, process.argv.slice(2));
