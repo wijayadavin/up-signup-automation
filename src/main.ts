@@ -1986,13 +1986,20 @@ const retryAllFailedCmd = command({
 
 const upworkCmd = command({
   name: 'upwork',
-  description: 'Login (or restore session) and open the Most Recent jobs feed',
+  description: 'Process pending users for sign-up automation (duplicate of process-users)',
   args: {
     userId: option({
       type: number,
       long: 'user-id',
-      short: 'u',
-      description: 'User ID to use',
+      description: 'Process only a specific user by ID (overrides limit)',
+      defaultValue: () => 0,
+    }),
+    limit: option({
+      type: number,
+      long: 'limit',
+      short: 'l',
+      description: 'Maximum number of users to process',
+      defaultValue: () => 5,
     }),
     headless: flag({
       type: boolean,
@@ -2001,45 +2008,70 @@ const upworkCmd = command({
       description: 'Run browser in headless mode',
       defaultValue: () => false,
     }),
+    upload: flag({
+      type: boolean,
+      long: 'upload',
+      short: 'u',
+      description: 'Test upload mode: only run until Step 4 (Resume Import)',
+      defaultValue: () => false,
+    }),
     noStealth: flag({
       type: boolean,
       long: 'no-stealth',
       short: 's',
-      description: 'Disable stealth / enable normal browser behavior',
+      description: 'Disable stealth mode for debugging (use normal browser behavior)',
       defaultValue: () => false,
     }),
     restoreSession: flag({
       type: boolean,
       long: 'restore-session',
       short: 'r',
-      description: 'Try restoring saved session before logging in',
-      defaultValue: () => true,
+      description: 'Restore existing session instead of starting from login',
+      defaultValue: () => false,
     }),
-    keepOpen: flag({
+    skipOtp: flag({
       type: boolean,
-      long: 'keep-open',
-      short: 'k',
-      description: 'Keep the browser open after reaching the feed',
+      long: 'skip-otp',
+      description: 'Skip location step (except profile picture) and redirect to submit page',
+      defaultValue: () => false,
+    }),
+    skipLocation: flag({
+      type: boolean,
+      long: 'skip-location',
+      description: 'Skip the location page and mark rate step as completed',
+      defaultValue: () => false,
+    }),
+    step: option({
+      type: string,
+      long: 'step',
+      description: 'Force start from a specific step (e.g., "employment")',
+      defaultValue: () => '',
+    }),
+    retry: flag({
+      type: boolean,
+      long: 'retry',
+      description: 'Retry users flagged with captcha after all other users are completed',
       defaultValue: () => false,
     }),
   },
   handler: async (args) => {
     try {
-      await runMigrations();
-      if (!args.userId) throw new Error("--user-id is required");
       await runUpwork({
-        userId: args.userId,
+        userId: args.userId > 0 ? args.userId : undefined,
+        limit: args.limit,
         headless: args.headless,
+        upload: args.upload,
         noStealth: args.noStealth,
         restoreSession: args.restoreSession,
-        keepOpen: args.keepOpen,
+        skipOtp: args.skipOtp,
+        skipLocation: args.skipLocation,
+        step: args.step,
+        retry: args.retry,
       });
     } catch (error) {
       const logger = getLogger(import.meta.url);
       logger.error(error, 'Failed to run upwork command');
       process.exit(1);
-    } finally {
-      await closeDatabase();
     }
   },
 });
