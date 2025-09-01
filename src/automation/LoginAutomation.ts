@@ -79,6 +79,41 @@ export class LoginAutomation extends BaseAutomation {
     logger.info('Registered step handlers:', Array.from(this.stepHandlers.keys()));
   }
 
+  /**
+   * Check if the current URL indicates a successful login
+   * @param url The URL to check
+   * @returns true if the URL indicates successful login
+   */
+  private isSuccessfulLoginUrl(url: string): boolean {
+    const successfulLoginPatterns = [
+      '/nx/find-work/*',           // Job search pages
+      '/nx/create-profile/*',      // Profile creation pages
+      '/nx/account/*',              // Account pages
+      '/nx/dashboard/*',           // Dashboard pages
+      '/nx/messages/*',             // Messages pages
+      '/nx/contracts/*',           // Contracts pages
+      '/nx/reports/*',             // Reports pages
+      '/nx/settings/*',            // Settings pages
+      '/nx/profile/*',             // Profile pages
+      '/nx/earnings/*',            // Earnings pages
+      '/nx/time/*',                // Time tracking pages
+      '/nx/team/*',                // Team pages
+      '/nx/agencies/*',            // Agency pages
+      '/nx/talent/*',              // Talent pages
+      '/nx/work/*',                // Work pages
+      '/nx/notifications/*',       // Notifications pages
+      '/nx/help/*',                // Help pages
+      '/nx/ab/account-security/*', // Account security pages (after login)
+    ];
+
+    return successfulLoginPatterns.some(pattern => {
+      // Convert wildcard pattern to regex
+      const regexPattern = pattern.replace(/\*/g, '.*');
+      const regex = new RegExp(regexPattern);
+      return regex.test(url);
+    });
+  }
+
   async execute(options?: { uploadOnly?: boolean; restoreSession?: boolean; skipOtp?: boolean; skipLocation?: boolean; step?: string }): Promise<LoginResult> {
     try {
       logger.info('Starting login automation...');
@@ -901,6 +936,17 @@ export class LoginAutomation extends BaseAutomation {
       currentUrl = this.page.url();
       logger.info(`URL after enhanced form submission: ${currentUrl}`);
       
+      // Check if we're on a successful login page (whitelist of URLs that indicate successful login)
+      if (this.isSuccessfulLoginUrl(currentUrl)) {
+        logger.info(`✅ Successfully logged in and redirected to: ${currentUrl}`);
+        return {
+          status: 'success',
+          stage: 'login',
+          screenshots: this.screenshots,
+          url: currentUrl,
+        };
+      }
+      
       // If still not redirected, try one more time with longer wait
       if (!currentUrl.includes('/nx/create-profile')) {
         logger.info('Still not redirected, waiting 10 seconds and trying again...');
@@ -968,8 +1014,19 @@ export class LoginAutomation extends BaseAutomation {
       }
     }
     
-    // Final check if we're on create profile page
+    // Final check if we're on create profile page or successful login page
     if (!currentUrl.includes('/nx/create-profile') && !initialUrl.includes('/nx/create-profile')) {
+      // Check if we're on a successful login page (whitelist of URLs that indicate successful login)
+      if (this.isSuccessfulLoginUrl(currentUrl)) {
+        logger.info(`✅ Successfully logged in and redirected to: ${currentUrl}`);
+        return {
+          status: 'success',
+          stage: 'login',
+          screenshots: this.screenshots,
+          url: currentUrl,
+        };
+      }
+      
       // Wait a bit more and check again in case redirect is still in progress
       logger.info('Not on create profile page yet, waiting a bit more...');
       await this.randomDelay(3000, 5000);
@@ -977,6 +1034,17 @@ export class LoginAutomation extends BaseAutomation {
       
       const retryUrl = this.page.url();
       logger.info(`URL after additional wait: ${retryUrl}`);
+      
+      // Check again if we're on a successful login page
+      if (this.isSuccessfulLoginUrl(retryUrl)) {
+        logger.info(`✅ Successfully logged in and redirected to: ${retryUrl}`);
+        return {
+          status: 'success',
+          stage: 'login',
+          screenshots: this.screenshots,
+          url: retryUrl,
+        };
+      }
       
       if (!retryUrl.includes('/nx/create-profile')) {
         logger.warn(`Still not on create profile page after extended wait. Current URL: ${retryUrl}`);
@@ -986,6 +1054,17 @@ export class LoginAutomation extends BaseAutomation {
         
         const finalUrl = this.page.url();
         logger.info(`Final URL check: ${finalUrl}`);
+        
+        // Final check for successful login page
+        if (this.isSuccessfulLoginUrl(finalUrl)) {
+          logger.info(`✅ Successfully logged in and redirected to: ${finalUrl}`);
+          return {
+            status: 'success',
+            stage: 'login',
+            screenshots: this.screenshots,
+            url: finalUrl,
+          };
+        }
         
         if (!finalUrl.includes('/nx/create-profile')) {
           return this.createError(
