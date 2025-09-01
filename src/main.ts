@@ -13,6 +13,7 @@ import { ResumeGenerator } from './utils/resumeGenerator.js';
 import { SessionService } from './services/sessionService.js';
 // import { TextVerifiedService } from './services/textVerifiedService.js';
 import fs from 'fs';
+import { runUpwork } from './upwork.js';
 
 // Load environment variables
 dotenv.config();
@@ -800,7 +801,7 @@ const proxyPortsCmd = command({
             logger.info(`Fixed ${fixedCount} duplicate proxy port assignments`);
           }
           break;
-          
+
         default:
           logger.error(`Unknown action: ${args.action}`);
           process.exit(1);
@@ -1983,6 +1984,66 @@ const retryAllFailedCmd = command({
   }
 });
 
+const upworkCmd = command({
+  name: 'upwork',
+  description: 'Login (or restore session) and open the Most Recent jobs feed',
+  args: {
+    userId: option({
+      type: number,
+      long: 'user-id',
+      short: 'u',
+      description: 'User ID to use',
+    }),
+    headless: flag({
+      type: boolean,
+      long: 'headless',
+      short: 'h',
+      description: 'Run browser in headless mode',
+      defaultValue: () => false,
+    }),
+    noStealth: flag({
+      type: boolean,
+      long: 'no-stealth',
+      short: 's',
+      description: 'Disable stealth / enable normal browser behavior',
+      defaultValue: () => false,
+    }),
+    restoreSession: flag({
+      type: boolean,
+      long: 'restore-session',
+      short: 'r',
+      description: 'Try restoring saved session before logging in',
+      defaultValue: () => true,
+    }),
+    keepOpen: flag({
+      type: boolean,
+      long: 'keep-open',
+      short: 'k',
+      description: 'Keep the browser open after reaching the feed',
+      defaultValue: () => false,
+    }),
+  },
+  handler: async (args) => {
+    try {
+      await runMigrations();
+      if (!args.userId) throw new Error("--user-id is required");
+      await runUpwork({
+        userId: args.userId,
+        headless: args.headless,
+        noStealth: args.noStealth,
+        restoreSession: args.restoreSession,
+        keepOpen: args.keepOpen,
+      });
+    } catch (error) {
+      const logger = getLogger(import.meta.url);
+      logger.error(error, 'Failed to run upwork command');
+      process.exit(1);
+    } finally {
+      await closeDatabase();
+    }
+  },
+});
+
 // Main command with subcommands
 const mainCmd = command({
   name: 'up-crawler',
@@ -2027,6 +2088,9 @@ if (commandName === 'visit-login' && commandArgs.length > 0 && !commandArgs[0].s
 }
 
 switch (commandName) {
+  case 'upwork':
+    await run(upworkCmd, commandArgs);
+    break;
   case 'visit-login':
     await run(visitLoginPageCmd, commandArgs);
     break;

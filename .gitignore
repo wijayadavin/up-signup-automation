@@ -78,6 +78,7 @@ public
 tmp/
 temp/
 assets/resumes
+old-scraper/
 
 # Editor directories and files
 .vscode/

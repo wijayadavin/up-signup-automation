@@ -1,6 +1,6 @@
 import { Page } from 'puppeteer';
-import { getDatabase } from '../database/connection.js';
 import { getLogger } from '../utils/logger.js';
+import { getDatabase } from '../database/connection.js';
 
 const logger = getLogger(import.meta.url);
 
@@ -62,7 +62,7 @@ export class SessionService {
       const sessionState: SessionState = {
         cookies: cookieGroups,
         storage: [{
-          origin: page.url(),
+          origin,
           localStorage
         }],
         meta
@@ -130,16 +130,32 @@ export class SessionService {
       if (sessionState.meta.ua) {
         await page.setUserAgent(sessionState.meta.ua);
       }
-      
+
+       // Set cookies (after UA for fidelity)
+       for (const cookieGroup of sessionState.cookies) {
+         for (const cookie of cookieGroup.items) {
+           await page.setCookie({
+             name: cookie.name,
+             value: cookie.value,
+             domain: cookie.domain,
+             path: cookie.path,
+             httpOnly: cookie.httpOnly,
+             secure: cookie.secure,
+             sameSite: cookie.sameSite as any,
+             expires: cookie.expires
+           });
+         }
+       }
+
       // Set localStorage - navigate to each origin carefully
       for (const storageGroup of sessionState.storage) {
         try {
-          logger.info(`Setting localStorage for origin: ${storageGroup.origin}`);
-          await page.goto(storageGroup.origin, { 
-            waitUntil: 'domcontentloaded',
-            timeout: 5000
-          });
-          
+           const targetOrigin = (() => {
+             try { return new URL(storageGroup.origin).origin; }
+             catch { return 'https://www.upwork.com'; }
+           })();
+           logger.info(`Setting localStorage for origin: ${targetOrigin}`);
+           await page.goto(targetOrigin, { waitUntil: 'domcontentloaded', timeout: 15000 });          
           await page.evaluate((localStorageData) => {
             for (const [key, value] of Object.entries(localStorageData)) {
               window.localStorage.setItem(key, value);
@@ -217,7 +233,16 @@ export class SessionService {
       
       const proxyPort = user.last_proxy_port || 10001;
       logger.info(`Using proxy port ${proxyPort} for user ${userId}`);
-      
+
+       // Build Decodo username once: user-<session>[-country-xx][-zip-xxxxx]
+       const baseUser = process.env.PROXY_USER || 'spmmd0qqan'; // fallback for dev
+       const unameParts = [baseUser];
+       if (process.env.PROXY_COUNTRY) unameParts.push(`country-${process.env.PROXY_COUNTRY}`);
+       if (process.env.PROXY_ZIP_CODE) unameParts.push(`zip-${process.env.PROXY_ZIP_CODE}`);
+       const proxyUsername = unameParts.join('-');
+       const proxyPassword = process.env.PROXY_PASS || 'sZ0aawg5H8ma+mH1fO'; // fallback for dev
+
+
       // Create browser manager with specified mode and proxy
       const browserManager = new BrowserManager({ 
         headless: !headful, // Invert headful flag for headless setting
@@ -225,15 +250,18 @@ export class SessionService {
         proxy: {
           host: 'us.decodo.com',
           port: proxyPort,
-          username: 'spmmd0qqan',
-          password: 'sZ0aawg5H8ma+mH1fO'
+          username: proxyUsername,
+          password: proxyPassword,
         }
       });
       
       // Launch browser and get page
       const browser = await browserManager.launch();
       const page = await browser.newPage();
-      
+      // CRITICAL: authenticate BEFORE any navigation/evaluate
+      await page.authenticate({ username: proxyUsername, password: proxyPassword });
+      logger.info(`[Proxy] Auth applied for us.decodo.com:${proxyPort} as ${proxyUsername}`);
+
       // Restore session state
       const sessionLoaded = await this.loadSessionState(page, userId);
       if (!sessionLoaded) {
@@ -244,17 +272,24 @@ export class SessionService {
       logger.info(`Navigating to location page for user ${user.first_name} ${user.last_name}`);
       try {
         await page.goto('https://www.upwork.com/nx/create-profile/location', { 
-                      waitUntil: 'domcontentloaded',
-            timeout: 10000
+           waitUntil: 'domcontentloaded',
+           timeout: 15000
         });
         logger.info('Successfully navigated to location page');
       } catch (navigationError) {
         logger.warn('Failed to navigate to location page, trying main Upwork page instead:', navigationError);
         // Fallback to main Upwork page
-        await page.goto('https://www.upwork.com', { 
-                      waitUntil: 'domcontentloaded',
-            timeout: 10000
-        });
+        try {
+          await page.goto('https://www.upwork.com', { 
+            waitUntil: 'domcontentloaded',
+            timeout: 15000
+          });
+          logger.info('Navigated to main Upwork page as fallback');
+        } catch (e2) {
+          logger.warn('Fallback to main page failed, retrying with networkidle2');
+          await page.goto('https://www.upwork.com', { waitUntil: 'networkidle2', timeout: 20000 });
+          logger.info('Navigated to main Upwork page after retry');
+        }
         logger.info('Navigated to main Upwork page as fallback');
       }
       
