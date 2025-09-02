@@ -8,6 +8,7 @@ import { closeDatabase } from './database/connection.js';
 import { BrowserManager } from './browser/browserManager.js';
 import { UserService } from './services/userService.js';
 import { LoginService } from './services/loginService.js';
+import { SessionService } from './services/sessionService.js';
 
 // Load environment variables
 dotenv.config();
@@ -53,16 +54,35 @@ const upworkJobCrawlerCmd = command({
       description: 'Restore existing session instead of starting from login',
       defaultValue: () => false,
     }),
+    onlyPostprocess: flag({
+      type: boolean,
+      long: 'only-postprocess',
+      description: 'Only run postprocessing on existing jobs.json file',
+      defaultValue: () => false,
+    }),
   },
   handler: async (args) => {
     try {
-      await runUpworkJobCrawler({
-        pages: args.pages,
-        out: args.out,
-        headless: args.headless,
-        userId: args.userId > 0 ? args.userId : undefined,
-        restoreSession: args.restoreSession,
-      });
+      if (args.onlyPostprocess) {
+        // Only run postprocessing
+        logger.info('Running postprocessing only...');
+        await postprocessJobsFile(args.out);
+        logger.info('Postprocessing completed successfully');
+      } else {
+        // Run full job crawler
+        await runUpworkJobCrawler({
+          pages: args.pages,
+          out: args.out,
+          headless: args.headless,
+          userId: args.userId > 0 ? args.userId : undefined,
+          restoreSession: args.restoreSession,
+        });
+        
+        // Run postprocessing after successful crawling
+        logger.info('Running postprocessing on extracted jobs...');
+        await postprocessJobsFile(args.out);
+        logger.info('Postprocessing completed successfully');
+      }
     } catch (error) {
       logger.error(error, 'Failed to run upwork job crawler');
       process.exit(1);
@@ -172,33 +192,62 @@ async function extractJobsFromPage(page: any, pageNum: number): Promise<any[]> {
         const skillElements = tile.querySelectorAll('[data-test="attr-item"]');
         const skills = Array.from(skillElements).map(el => el.textContent?.trim()).filter(Boolean);
         
-        // Extract project type and hourly rate
+        // Extract project type, hourly rate, and budget
         const typeElement = tile.querySelector('[data-test="job-type"]');
         const typeText = typeElement?.textContent || '';
         let projectType = 'hourly';
         let hourly = null;
         let budget = null;
         
+        // Check if it's a fixed-price project
         if (typeText.toLowerCase().includes('fixed')) {
           projectType = 'fixed';
-          // Extract fixed budget
-          const budgetMatch = typeText.match(/\$(\d+(?:,\d+)?)/);
-          if (budgetMatch) {
-            budget = {
-              amount: parseInt(budgetMatch[1].replace(',', ''), 10),
-              currency: 'USD'
-            };
+          
+          // Look for budget in the separate budget element first
+          const budgetElement = tile.querySelector('[data-test="budget"]');
+          if (budgetElement) {
+            const budgetText = budgetElement.textContent?.trim() || '';
+            const budgetMatch = budgetText.match(/\$(\d+(?:,\d+)?)/);
+            if (budgetMatch) {
+              budget = {
+                amount: parseInt(budgetMatch[1].replace(',', ''), 10),
+                currency: 'USD'
+              };
+            }
+          } else {
+            // Fallback: try to extract budget from type text
+            const budgetMatch = typeText.match(/\$(\d+(?:,\d+)?)/);
+            if (budgetMatch) {
+              budget = {
+                amount: parseInt(budgetMatch[1].replace(',', ''), 10),
+                currency: 'USD'
+              };
+            }
           }
         } else {
-          // Extract hourly rate range
-          const hourlyMatch = typeText.match(/\$(\d+)-(\d+)/);
-          if (hourlyMatch) {
+          // Hourly project - extract rate range
+          projectType = 'hourly';
+          
+                  // Look for hourly rate in the type text
+        const hourlyMatch = typeText.match(/\$(\d+)\s*-\s*\$?(\d+)/);
+        if (hourlyMatch) {
+          hourly = {
+            min: parseInt(hourlyMatch[1], 10),
+            max: parseInt(hourlyMatch[2], 10),
+            currency: 'USD'
+          };
+        } else {
+          // Try to extract single hourly rate
+          const singleHourlyMatch = typeText.match(/\$(\d+)/);
+          if (singleHourlyMatch) {
+            const rate = parseInt(singleHourlyMatch[1], 10);
             hourly = {
-              min: parseInt(hourlyMatch[1], 10),
-              max: parseInt(hourlyMatch[2], 10),
+              min: rate,
+              max: rate,
               currency: 'USD'
             };
           }
+        }
         }
         
         // Extract experience level
@@ -339,13 +388,51 @@ async function crawlJobsForTaskA(
         }
         logger.info(`User found: ${user.email} (${user.country_code})`);
         
-        // Perform login using the modular login service
-        logger.info('Starting login process with LoginService...');
-        const loginResult = await loginService.performLogin(user, {
-          restoreSession,
-          skipOtp: false,
-          skipLocation: false
-        }, browserManager);
+        // For job crawling, we only need basic authentication
+        // Let's try to restore session first, then do basic login if needed
+        logger.info('Attempting to restore existing session for job crawling...');
+        
+        let loginResult;
+        if (restoreSession) {
+          // Try to restore session first
+          try {
+            const restored = await SessionService.loadSessionState(page, userId);
+            if (restored) {
+              logger.info('Session restored successfully, checking if we can access job pages...');
+              
+              // Test if we can access job pages with restored session
+              await page.goto('https://www.upwork.com/nx/find-work/best-matches', { 
+                waitUntil: 'domcontentloaded', 
+                timeout: 15000 
+              });
+              
+              const currentUrl = page.url();
+              if (currentUrl.includes('/nx/find-work/') || currentUrl.includes('/nx/dashboard/')) {
+                logger.info('✅ Session restored and can access job pages');
+                loginResult = {
+                  success: true,
+                  loginResult: { stage: 'login', url: currentUrl }
+                };
+              } else {
+                logger.info('Session restored but cannot access job pages, proceeding with login');
+                restoreSession = false; // Fall back to login
+              }
+            }
+          } catch (error) {
+            logger.warn('Failed to restore session:', error);
+            restoreSession = false; // Fall back to login
+          }
+        }
+        
+        // If session restoration failed or wasn't attempted, do basic login
+        if (!loginResult || !loginResult.success) {
+          logger.info('Performing basic login for job crawling...');
+          loginResult = await loginService.performLogin(user, {
+            restoreSession: false, // Don't restore session during login
+            skipOtp: true, // Skip OTP for job crawling
+            skipLocation: true, // Skip location for job crawling
+          }, browserManager);
+        }
         
         logger.info(`Login result status: ${loginResult.success ? 'SUCCESS' : 'FAILED'}`);
         if (loginResult.loginResult) {
@@ -376,6 +463,16 @@ async function crawlJobsForTaskA(
         }
         
         logger.info('✅ Login successful, proceeding with job crawling');
+
+        // Save session after successful login
+        try {
+          logger.info('Saving session state after successful login...');
+          await SessionService.saveSessionState(page, userId);
+          logger.info('Session state saved successfully');
+        } catch (error) {
+          logger.warn('Failed to save session state:', error);
+        }
+        
       } catch (error) {
         logger.error(error, 'Error during login process');
         throw error;
@@ -594,6 +691,173 @@ async function crawlJobsForTaskA(
   }
   
   return { pagesVisited, jobsCollected, uniqueJobIds, failures };
+}
+
+/**
+ * Postprocess jobs file to convert postedAt fields to ISO format
+ */
+async function postprocessJobsFile(outputFile: string): Promise<void> {
+  const fs = await import('fs');
+  const path = await import('path');
+  
+  try {
+    // Check if file exists
+    if (!fs.existsSync(outputFile)) {
+      logger.warn(`Output file ${outputFile} does not exist, skipping postprocessing`);
+      return;
+    }
+    
+    // Read the jobs file
+    const fileContent = fs.readFileSync(outputFile, 'utf8');
+    if (!fileContent.trim()) {
+      logger.warn(`Output file ${outputFile} is empty, skipping postprocessing`);
+      return;
+    }
+    
+    // Parse JSONL format (one job per line)
+    const lines = fileContent.trim().split('\n').filter(line => line.trim());
+    const jobs = lines.map(line => {
+      try {
+        return JSON.parse(line);
+      } catch (error) {
+        logger.warn(`Failed to parse job line: ${line.substring(0, 100)}...`);
+        return null;
+      }
+    }).filter(Boolean);
+    
+    if (jobs.length === 0) {
+      logger.warn('No valid jobs found for postprocessing');
+      return;
+    }
+    
+    logger.info(`Processing ${jobs.length} jobs for postedAt conversion...`);
+    
+    // Process each job
+    let processedCount = 0;
+    const processedJobs = jobs.map(job => {
+      if (job.postedAt && job.extractedAt) {
+        const convertedPostedAt = convertPostedAtToISO(job.postedAt, job.extractedAt);
+        if (convertedPostedAt) {
+          job.postedAt = convertedPostedAt;
+          processedCount++;
+        }
+      }
+      return job;
+    });
+    
+    // Write back to file
+    const jsonlContent = processedJobs.map(job => JSON.stringify(job)).join('\n');
+    fs.writeFileSync(outputFile, jsonlContent, 'utf8');
+    
+    logger.info(`Postprocessing completed: ${processedCount}/${jobs.length} jobs updated`);
+    
+  } catch (error) {
+    logger.error(error, 'Failed to postprocess jobs file');
+    throw error;
+  }
+}
+
+/**
+ * Convert postedAt field to ISO format based on extractedAt timestamp
+ */
+function convertPostedAtToISO(postedAt: string, extractedAt: string): string | null {
+  try {
+    const extractedDate = new Date(extractedAt);
+    if (isNaN(extractedDate.getTime())) {
+      logger.warn(`Invalid extractedAt date: ${extractedAt}`);
+      return null;
+    }
+    
+    const postedAtLower = postedAt.toLowerCase().trim();
+    
+    // Handle "X minutes ago", "X hours ago", "X days ago"
+    if (postedAtLower.includes('minute')) {
+      const minutes = parseInt(postedAt.match(/(\d+)/)?.[1] || '0');
+      const resultDate = new Date(extractedDate.getTime() - (minutes * 60 * 1000));
+      return resultDate.toISOString();
+    }
+    
+    if (postedAtLower.includes('hour')) {
+      const hours = parseInt(postedAt.match(/(\d+)/)?.[1] || '0');
+      const resultDate = new Date(extractedDate.getTime() - (hours * 60 * 60 * 1000));
+      return resultDate.toISOString();
+    }
+    
+    if (postedAtLower.includes('day')) {
+      const days = parseInt(postedAt.match(/(\d+)/)?.[1] || '0');
+      const resultDate = new Date(extractedDate.getTime() - (days * 24 * 60 * 60 * 1000));
+      return resultDate.toISOString();
+    }
+    
+    // Handle "X weeks ago"
+    if (postedAtLower.includes('week')) {
+      const weeks = parseInt(postedAt.match(/(\d+)/)?.[1] || '0');
+      const resultDate = new Date(extractedDate.getTime() - (weeks * 7 * 24 * 60 * 60 * 1000));
+      return resultDate.toISOString();
+    }
+    
+    // Handle "X months ago"
+    if (postedAtLower.includes('month')) {
+      const months = parseInt(postedAt.match(/(\d+)/)?.[1] || '0');
+      const resultDate = new Date(extractedDate.getTime() - (months * 30 * 24 * 60 * 60 * 1000));
+      return resultDate.toISOString();
+    }
+    
+    // Handle "X years ago"
+    if (postedAtLower.includes('year')) {
+      const years = parseInt(postedAt.match(/(\d+)/)?.[1] || '0');
+      const resultDate = new Date(extractedDate.getTime() - (years * 365 * 24 * 60 * 60 * 1000));
+      return resultDate.toISOString();
+    }
+    
+    // Handle "last week", "last month", etc.
+    if (postedAtLower.includes('last week')) {
+      const resultDate = new Date(extractedDate.getTime() - (7 * 24 * 60 * 60 * 1000));
+      return resultDate.toISOString();
+    }
+    
+    if (postedAtLower.includes('last month')) {
+      const resultDate = new Date(extractedDate.getTime() - (30 * 24 * 60 * 60 * 1000));
+      return resultDate.toISOString();
+    }
+    
+    // Handle "today", "yesterday"
+    if (postedAtLower.includes('today')) {
+      const today = new Date(extractedDate);
+      today.setHours(0, 0, 0, 0);
+      return today.toISOString();
+    }
+    
+    if (postedAtLower.includes('yesterday')) {
+      const yesterday = new Date(extractedDate.getTime() - (24 * 60 * 60 * 1000));
+      yesterday.setHours(0, 0, 0, 0);
+      return yesterday.toISOString();
+    }
+    
+    // Handle specific time formats like "2:30 PM", "14:30"
+    const timeMatch = postedAt.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    if (timeMatch) {
+      const hours = parseInt(timeMatch[1]);
+      const minutes = parseInt(timeMatch[2]);
+      const ampm = timeMatch[3]?.toUpperCase();
+      
+      let adjustedHours = hours;
+      if (ampm === 'PM' && hours !== 12) adjustedHours += 12;
+      if (ampm === 'AM' && hours === 12) adjustedHours = 0;
+      
+      const resultDate = new Date(extractedDate);
+      resultDate.setHours(adjustedHours, minutes, 0, 0);
+      return resultDate.toISOString();
+    }
+    
+    // If no pattern matches, return null (keep original)
+    logger.debug(`No conversion pattern found for postedAt: ${postedAt}`);
+    return null;
+    
+  } catch (error) {
+    logger.warn(`Failed to convert postedAt "${postedAt}": ${error}`);
+    return null;
+  }
 }
 
 // Main execution for Task A
