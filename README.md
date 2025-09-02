@@ -10,30 +10,76 @@ A robust puppeteer-based sign-up automation tool for Upwork with PostgreSQL data
 
 ## Usage
 
-See [QUICKSTART.md](QUICKSTART.md) for more details
+This application provides **three main features**:
+
+1. **User Profile Automation** (`process-users`) - Complete Upwork profile creation automation
+2. **Job Crawler** (`start:upwork`) - Extract job listings from Upwork search pages  
+3. **Turnstile Solver** (`start:turnstile`) - Solve Cloudflare Turnstile challenges
+
+### Quick Start
+
+**Before running any commands, you need to:**
+
+1. **Set up OTP API keys** for phone verification:
+   ```bash
+   # Required for process-users command
+   SMSPOOL_API_KEY=your_smspool_api_key      # Primary OTP provider
+   SMSMAN_API_KEY=your_smsman_api_key        # Backup OTP provider
+   ```
+
+2. **Add users to the database** (required for profile automation):
+   ```bash
+   # Add individual user
+   npm start add-user -- --first-name "John" --last-name "Doe" --email "john@example.com" --password "password123" --country-code "US"
+   
+   # Or import from CSV
+   npm start import-csv -- --file data/users.csv
+   ```
+
+3. **Mark users as ready** by setting `up_created_at` timestamp in database
 
 ### Available Commands
 
-The application provides several commands for different operations:
-
-- **`visit-login`**: Test basic functionality by visiting the Upwork login page
-  - `--debug`: Check login status without performing login (for debugging)
-  - `--headless`: Run browser in headless mode
-  - `--keep-open`: Keep browser open indefinitely
-- **`add-user`**: Add individual users to the database
+#### **Profile Automation Commands**
 - **`process-users`**: Run complete login automation for pending users
   - `--user-id <id>`: Process only a specific user by ID (overrides limit)
-  - `--upload`: Enable upload mode for resume import step (handles file upload instead of manual form filling)
-  - `--no-stealth`: Disable stealth mode for debugging (use normal browser behavior)
-  - `--restore-session`: Restore existing session instead of starting from login
-  - `--skip-otp`: Skip location step (except profile picture) and redirect to submit page
-  - `--retry`: Retry captcha-flagged users after processing all other users (assigns new proxy ports)
-- **`stats`**: View application statistics and user status
-- **`test-proxy`**: Test proxy configuration and verify IP details
+  - `--limit <number>`: Process specific number of users (default: 5)
+  - `--upload`: Enable upload mode for resume import step
+  - `--no-stealth`: Disable stealth mode for debugging
+  - `--restore-session`: Restore existing session instead of fresh login
+  - `--skip-otp`: Skip location step and use manual OTP system
+  - `--retry`: Retry captcha-flagged users after normal processing
+  - `--headless`: Run browser in headless mode
+
+- **`add-user`**: Add individual users to the database
 - **`import-csv`**: Bulk import users from CSV/TSV files
+- **`stats`**: View application statistics and user status
+- **`visit-login`**: Test basic functionality by visiting Upwork login page
+  - `--debug`: Check login status without performing login
+  - `--headless`: Run browser in headless mode
+  - `--keep-open`: Keep browser open indefinitely
+  - `--user-id <id>`: Use specific user's proxy settings
+
+#### **Job Crawler Commands**
+- **`start:upwork`**: Crawl Upwork job listings
+  - `--pages <number>`: Number of pages to crawl (default: 25)
+  - `--out <file>`: Output file path (default: out/jobs.json)
+  - `--restore-session`: Restore existing session
+
+#### **Turnstile Solver Commands**
+- **`start:turnstile`**: Solve Cloudflare Turnstile challenges
+  - `--attempts <number>`: Number of attempts per site (default: 10)
+  - `--timeout <seconds>`: Timeout per attempt (default: 90)
+  - `--out <file>`: Output file path (default: out/turnstile_results.json)
+  - `--no-proxy`: Disable proxy usage
+  - `--no-headless`: Run browser in visible mode
+  - `--no-stealth`: Disable stealth mode
+
+#### **Utility Commands**
+- **`test-proxy`**: Test proxy configuration and verify IP details
 - **`restore-session`**: Restore user session and open location page for manual completion
-  - `--headful`: Run browser in headful mode using system Chrome for natural browsing
-- **`wait-otp`**: Wait for OTP from TextVerified.com API
+  - `--headful`: Run browser in headful mode using system Chrome
+- **`wait-otp`**: Wait for OTP from SMS providers
   - `--user-id <id>`: User ID to wait for OTP
   - `--timeout <seconds>`: Timeout in seconds (default: 50)
 
@@ -65,6 +111,94 @@ npm start visit-login --keep-open  # ❌ Wrong (missing --)
 ```bash
 # Direct execution (no npm start needed):
 node dist/main.js visit-login --debug --headless
+```
+
+### Command Examples by Feature
+
+#### **1. User Profile Automation**
+```bash
+# Process 5 users (default)
+npm start process-users
+
+# Process specific number of users
+npm start process-users -- --limit 10
+
+# Process specific user by ID
+npm start process-users -- --user-id 6
+
+# Run in headless mode
+npm start process-users -- --headless
+
+# Enable resume upload mode
+npm start process-users -- --upload
+
+# Restore existing session
+npm start process-users -- --restore-session
+
+# Skip OTP and use the manual system
+npm start process-users -- --skip-otp
+
+# Retry captcha-flagged users
+npm start process-users -- --retry
+```
+
+#### **2. Job Crawler**
+```bash
+# Crawl 25 pages (default)
+npm run start:upwork
+
+# Crawl specific number of pages
+npm run start:upwork -- --pages 10
+
+# Specify output file
+npm run start:upwork -- --out results/jobs.json
+
+# Use existing session
+npm run start:upwork -- --restore-session
+```
+
+#### **3. Turnstile Solver**
+```bash
+# Solve 10 attempts per site (default)
+npm run start:turnstile
+
+# Custom attempts and timeout
+npm run start:turnstile -- --attempts 5 --timeout 60
+
+# Specify output file
+npm run start:turnstile -- --out results/turnstile.json
+
+# Disable proxy and stealth
+npm run start:turnstile -- --no-proxy --no-stealth
+```
+
+### Environment Variables Required
+
+**For User Profile Automation (`process-users` command):**
+```bash
+# OTP API Keys (Required for phone verification)
+SMSPOOL_API_KEY=your_smspool_api_key      # Primary OTP provider
+SMSMAN_API_KEY=your_smsman_api_key        # Backup OTP provider
+
+# Database Configuration
+DATABASE_URL=postgresql://user:pass@localhost:5432/upcrawler
+
+# Proxy Configuration (Optional but recommended)
+PROXY_HOST=us.decodo.com
+PROXY_USER=your_session_id
+PROXY_PASS=your_proxy_password
+PROXY_COUNTRY=us
+PROXY_ZIP_CODE=94102
+```
+
+**For Job Crawler and Turnstile Solver:**
+```bash
+# 2captcha API Key (Required for Turnstile solving)
+CAPTCHA_API_KEY=a15794fb3ff5eaa7eef90604b543cf1a
+
+# Optional: Custom settings
+LOG_LEVEL=info
+PUPPETEER_HEADLESS=true
 ```
 
 ### Visit Login Page
@@ -108,7 +242,9 @@ npm start -- visit-login --user-id 6 --keep-open
   - `debug-unknown-page-*.png`: When on unexpected page
 - **No Automation**: Use `process-users` command for actual login automation
 
-### Process Users with Full Login Automation
+### Feature Workflows
+
+#### **1. User Profile Automation Workflow**
 Run the complete login automation for pending users:
 
 ```bash
@@ -125,13 +261,54 @@ npm start process-users -- --headless
 npm start process-users -- --no-stealth
 ```
 
-The automation includes:
+**Prerequisites:**
+1. **Add users to database** using `add-user` or `import-csv` commands
+2. **Set OTP API keys** in environment variables
+3. **Mark users as ready** by setting `up_created_at` timestamp
+
+**The automation includes:**
 - **Email Entry**: Navigate to login page, enter email, click Continue
 - **Password Entry**: Enter password, click Login
-- **Create Profile**: Click "Get Started" on profile creation page
+- **Create Profile**: Complete 16-step profile creation workflow
 - **Error Detection**: MFA, CAPTCHA, suspicious login, invalid credentials
 - **Screenshots**: Captured at each major step for debugging
 - **Human-like Behavior**: Random delays, realistic typing patterns
+
+#### **2. Job Crawler Workflow**
+Extract job listings from Upwork search pages:
+
+```bash
+# Crawl 25 pages (default)
+npm run start:upwork
+
+# Custom configuration
+npm run start:upwork -- --pages 10 --out results/jobs.json
+```
+
+**Features:**
+- **Page-by-page crawling** with retry logic and stability measures
+- **Job deduplication** by job ID
+- **Comprehensive data extraction** including skills, budget, client info
+- **Output**: `out/jobs.json` with one job per line
+- **Summary**: JSON output with pages visited, jobs collected, duration
+
+#### **3. Turnstile Solver Workflow**
+Solve Cloudflare Turnstile challenges for testing:
+
+```bash
+# Solve 10 attempts per site (default)
+npm run start:turnstile
+
+# Custom configuration
+npm run start:turnstile -- --attempts 5 --timeout 60
+```
+
+**Features:**
+- **Sequential solving** of 2 demo sites × 10 attempts each (20 total)
+- **2captcha integration** with provided API key
+- **Success detection** by page state verification
+- **Output**: `out/turnstile_results.json` with attempt logs and summaries
+- **Configurable**: Timeouts, attempt counts, output paths
 
 **No-Stealth Mode (`--no-stealth`)**:
 - **Purpose**: Disable stealth mode for debugging and troubleshooting
@@ -621,8 +798,9 @@ The new SubmitStepHandler provides robust profile submission:
 - **Optimized Wait Strategies**: Uses `domcontentloaded` instead of `networkidle2`
 - **Better Error Recovery**: Faster retry mechanisms with shorter delays
 
-### Result Tracking
+### Output Formats
 
+#### **User Profile Automation Results**
 Each automation attempt produces a detailed result:
 
 **Success Example:**
@@ -652,6 +830,65 @@ Each automation attempt produces a detailed result:
   },
   "url": "https://www.upwork.com/ab/account-security/login",
   "evidence": "Suspicious login indicators detected"
+}
+```
+
+#### **Job Crawler Output**
+**Individual Job Format** (`out/jobs.json`):
+```json
+{
+  "jobId": "~0123456789abcdef",
+  "title": "Full-Stack Developer Needed",
+  "url": "https://www.upwork.com/jobs/~0123456789abcdef",
+  "description": "We need a skilled developer...",
+  "skills": ["JavaScript", "React", "Node.js"],
+  "projectType": "hourly",
+  "experienceLevel": "Intermediate",
+  "budget": {"min": 25, "max": 50, "currency": "USD"},
+  "postedAt": "2025-01-15T10:30:00Z",
+  "connectsRequired": 6,
+  "client": {
+    "country": "United States",
+    "paymentVerified": true,
+    "rating": 4.8,
+    "totalSpent": "$50K+",
+    "hires": 15,
+    "jobsPosted": 25
+  },
+  "pageNumber": 1
+}
+```
+
+**Summary Output** (stdout):
+```json
+{
+  "pagesVisited": 25,
+  "jobsCollected": 1245,
+  "uniqueJobIds": 1245,
+  "durationMs": 123456,
+  "failures": []
+}
+```
+
+#### **Turnstile Solver Output**
+**Attempt Logs** (`out/turnstile_results.json`):
+```json
+{
+  "site": "2captcha.com/demo/cloudflare-turnstile",
+  "attempt": 3,
+  "startedAt": "2025-01-15T10:15:00Z",
+  "durationMs": 8000,
+  "status": "success"
+}
+```
+
+**Site Summary**:
+```json
+{
+  "attempts": 10,
+  "successes": 8,
+  "successRate": 0.8,
+  "avgDurationMs": 9500
 }
 ```
 
@@ -952,9 +1189,20 @@ npm test
 
 ## Project Structure
 
+This project follows the structure specified in TASK.md:
+
 ```
-src/
-├── automation/                    # Automation framework
+/src
+├── upwork.ts                     # Task A entrypoint - Job crawler
+├── turnstile.ts                  # Task B entrypoint - Turnstile solver
+├── main.ts                       # CLI entry point for profile automation
+├── lib/                          # Helper utilities
+│   ├── selectors/                # CSS selectors and element locators
+│   ├── waiters/                  # Wait strategies and timing utilities
+│   ├── logging/                  # Structured logging utilities
+│   └── helpers/                  # Common helper functions
+├── types.ts                      # Shared TypeScript types
+├── automation/                    # Profile automation framework
 │   ├── LoginAutomation.ts        # Main automation orchestrator
 │   ├── FormAutomation.ts         # Form filling utilities
 │   ├── NavigationAutomation.ts   # Navigation and button clicking
@@ -977,8 +1225,8 @@ src/
 │   ├── loginAutomation.ts        # Complete 16-step profile creation
 │   ├── userService.ts            # User database operations
 │   ├── upworkService.ts          # Upwork-specific automation logic
-│   ├── textVerifiedService.ts    # SMS verification API integration (US)
-│   ├── smspoolService.ts         # SMS verification API integration (GB, UA, ID)
+│   ├── smspoolService.ts         # SMS verification API integration (primary)
+│   ├── smsManService.ts          # SMS verification API integration (backup)
 │   ├── manualOtpService.ts       # Database-based manual OTP system
 │   └── sessionService.ts         # Session state management
 ├── browser/                      # Browser management
@@ -990,29 +1238,54 @@ src/
 │   └── migrations/               # Database schema migrations
 ├── commands/                     # CLI commands
 │   └── importCsv.ts              # CSV import functionality
-├── utils/                        # Utilities
-│   ├── logger.ts                 # Structured logging
-│   ├── csv.ts                    # CSV parsing utilities
-│   └── resumeGenerator.ts        # PDF resume generation
-├── types/                        # TypeScript definitions
-│   └── database.ts               # Database types and interfaces
-└── main.ts                       # CLI entry point
+└── utils/                        # Utilities
+    ├── logger.ts                 # Structured logging
+    ├── csv.ts                    # CSV parsing utilities
+    └── resumeGenerator.ts        # PDF resume generation
 
-assets/
+/assets
 ├── images/
 │   └── profile-picture.png       # Default profile picture
 └── resumes/                      # Generated PDF resumes
+
+/out                              # Output directory for crawler results
+├── jobs.json                     # Job crawler output
+└── turnstile_results.json        # Turnstile solver results
 ```
 
 **Key Components:**
 
-- **`loginAutomation.ts`**: Contains all 15 step handlers with comprehensive error handling
+- **`loginAutomation.ts`**: Contains all 16 step handlers with comprehensive error handling
 - **`LoginAutomation.ts`**: Orchestrates the automation flow and manages session state
-- **`textVerifiedService.ts`**: Handles real SMS verification via TextVerified.com API (US users)
-- **`smspoolService.ts`**: Handles real SMS verification via SMSPool API (GB, UA, ID users)
+- **`smspoolService.ts`**: Handles real SMS verification via SMSPool API (primary provider)
+- **`smsManService.ts`**: Handles real SMS verification via SMS-Man API (backup provider)
 - **`manualOtpService.ts`**: Manages database-based manual OTP system
 - **`sessionService.ts`**: Manages browser session persistence and restoration
 - **`resumeGenerator.ts`**: Generates ATS-friendly PDF resumes from user data
+
+### NPM Scripts
+
+As specified in TASK.md, the following scripts are available:
+
+```bash
+# Build the project
+npm run build
+
+# Profile automation (main feature)
+npm start <command> -- <flags>
+
+# Job crawler (Task A)
+npm run start:upwork --pages 25 --out out/jobs.json
+
+# Turnstile solver (Task B)  
+npm run start:turnstile --out out/turnstile_results.json
+
+# Development
+npm run dev
+npm run migrate
+npm run lint
+npm test
+```
 
 **OTP System Architecture:**
 
