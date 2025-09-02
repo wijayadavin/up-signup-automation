@@ -290,6 +290,9 @@ async function solveTurnstileChallenge(
       // For challenge sites, don't wait for page to be fully loaded
       await page.goto(siteUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       logger.info('Challenge page loaded, waiting for parameters...');
+      
+      // Wait a bit for the turnstile widget to initialize
+      await new Promise(resolve => setTimeout(resolve, 2000));
     } else {
       // For regular sites, wait for full page load
       await page.goto(siteUrl, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -307,7 +310,62 @@ async function solveTurnstileChallenge(
     let result: any;
     
     if (siteUrl.includes('cloudflare-turnstile-challenge')) {
-      // For challenge sites, wait for intercepted parameters
+      // For challenge sites, first check if already solved
+      logger.info('Checking if challenge is already solved...');
+      
+      // Wait a bit for the page to fully load
+      await page.waitForFunction(() => document.readyState === 'complete', { timeout: 10000 });
+      
+      // Check if success message already exists
+      const successElement = await page.$('p._successMessage_1ndnh_1');
+      if (successElement) {
+        const successText = await successElement.evaluate((el: any) => el.textContent);
+        if (successText && successText.includes('Captcha is passed successfully!')) {
+          logger.info('Challenge already solved! Success message found.');
+          return true;
+        }
+      }
+      
+      // If not already solved, check if we need to refresh for a fresh challenge
+      logger.info('Challenge not solved, checking if we need a fresh challenge...');
+      
+      // Look for the turnstile widget
+      const turnstileWidget = await page.$('.cf-turnstile');
+      if (!turnstileWidget) {
+        logger.info('No turnstile widget found, refreshing page for fresh challenge...');
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Re-inject the interception script after refresh
+        await page.evaluateOnNewDocument(() => {
+          console.clear = () => console.log('Console was cleared')
+          const i = setInterval(() => {
+              if ((window as any).turnstile) {
+                  clearInterval(i);
+                  (window as any).turnstile.render = (a: any, b: any) => {
+                      let params = {
+                          sitekey: b.sitekey,
+                          pageurl: window.location.href,
+                          data: b.cData,
+                          pagedata: b.chlPageData,
+                          action: b.action,
+                          userAgent: navigator.userAgent,
+                          json: 1
+                      }
+                      // we will intercept the message in puppeeter
+                      console.log('intercepted-params:' + JSON.stringify(params));
+                      (window as any).cfCallback = b.callback;
+                      return
+                  }
+              }
+          }, 50)
+        });
+        
+        // Wait a bit more for the widget to load after refresh
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+      
+      // Now wait for intercepted parameters
       logger.info('Waiting for intercepted parameters...');
       
       // Wait for parameters with timeout
@@ -328,14 +386,36 @@ async function solveTurnstileChallenge(
         pagedata: interceptedParams.pagedata
       } as any);
     } else {
-      // For regular sites, look for the cf-turnstile div with data-sitekey attribute
-      logger.info('Looking for cf-turnstile div with data-sitekey...');
-      const turnstileDiv = await page.waitForSelector('.cf-turnstile[data-sitekey]', { 
-        timeout: 10000 
-      });
+      // For regular sites, first check if already solved
+      logger.info('Checking if regular turnstile is already solved...');
+      
+      // Wait a bit for the page to fully load
+      await page.waitForFunction(() => document.readyState === 'complete', { timeout: 10000 });
+      
+      // Check if success message already exists
+      const body = await page.evaluate(() => document.body.textContent || '');
+      if (body.includes('"success": true') && body.includes('"error-codes": []')) {
+        logger.info('Regular turnstile already solved! Success response found.');
+        return true;
+      }
+      
+      // If not already solved, check if we need to refresh for a fresh challenge
+      logger.info('Turnstile not solved, checking if we need a fresh challenge...');
+      
+      // Look for the turnstile widget
+      let turnstileDiv = await page.$('.cf-turnstile[data-sitekey]');
+      if (!turnstileDiv) {
+        logger.info('No turnstile widget found, refreshing page for fresh challenge...');
+        await page.reload({ waitUntil: 'networkidle2' });
+        await page.waitForFunction(() => document.readyState === 'complete', { timeout: 10000 });
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Try to find the widget again
+        turnstileDiv = await page.waitForSelector('.cf-turnstile[data-sitekey]', { timeout: 10000 });
+      }
       
       if (!turnstileDiv) {
-        throw new Error('cf-turnstile div with data-sitekey not found');
+        throw new Error('cf-turnstile div with data-sitekey not found even after refresh');
       }
       
       // Extract site key and solve normally
@@ -394,14 +474,25 @@ async function solveTurnstileChallenge(
         await page.waitForFunction(() => document.readyState === 'complete', { timeout: 30000 });
         
         // Additional wait for dynamic content to load
-        logger.info('Waiting additional 10 seconds for dynamic content...');
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        logger.info('Waiting additional 5 seconds for dynamic content...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        // Check if success message already exists (might have been solved immediately)
+        const successElement = await page.$('p._successMessage_1ndnh_1');
+        if (successElement) {
+          const successText = await successElement.evaluate((el: any) => el.textContent);
+          if (successText && successText.includes('Captcha is passed successfully!')) {
+            clearTimeout(successTimeout);
+            logger.info('Success message found immediately on challenge page!');
+            return true;
+          }
+        }
         
         // Debug: Check what's on the page
         const pageContent = await page.evaluate(() => document.body.innerHTML);
         logger.info(`Page HTML preview: ${pageContent.substring(0, 500)}...`);
         
-        // Wait for success message with longer timeout
+        // Wait for success message with timeout
         logger.info('Waiting for success message to appear...');
         await page.waitForFunction(() => {
           const successElement = document.querySelector('p._successMessage_1ndnh_1');
@@ -409,7 +500,7 @@ async function solveTurnstileChallenge(
             return true;
           }
           return false;
-        }, { timeout: 90000 }); // Increased to 90 seconds
+        }, { timeout: 60000 }); // Reduced to 60 seconds since we already waited
         
         clearTimeout(successTimeout);
         logger.info('Success message found on challenge page!');

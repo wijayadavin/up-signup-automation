@@ -1,26 +1,165 @@
 {
   "attempts": [
     {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 1,
+      "startedAt": "2025-09-02T17:09:51.845Z",
+      "durationMs": 18981,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 2,
+      "startedAt": "2025-09-02T17:10:12.829Z",
+      "durationMs": 19771,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 3,
+      "startedAt": "2025-09-02T17:10:34.603Z",
+      "durationMs": 19018,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 4,
+      "startedAt": "2025-09-02T17:10:55.622Z",
+      "durationMs": 18276,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 5,
+      "startedAt": "2025-09-02T17:11:15.900Z",
+      "durationMs": 20136,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 6,
+      "startedAt": "2025-09-02T17:11:38.044Z",
+      "durationMs": 18555,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 7,
+      "startedAt": "2025-09-02T17:11:58.601Z",
+      "durationMs": 17949,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 8,
+      "startedAt": "2025-09-02T17:12:18.556Z",
+      "durationMs": 18303,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 9,
+      "startedAt": "2025-09-02T17:12:38.863Z",
+      "durationMs": 18379,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile",
+      "attempt": 10,
+      "startedAt": "2025-09-02T17:12:59.245Z",
+      "durationMs": 17566,
+      "status": "success"
+    },
+    {
       "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
       "attempt": 1,
-      "startedAt": "2025-09-02T16:34:44.128Z",
-      "durationMs": 22658,
+      "startedAt": "2025-09-02T17:13:16.811Z",
+      "durationMs": 3801,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 2,
+      "startedAt": "2025-09-02T17:13:22.616Z",
+      "durationMs": 4007,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 3,
+      "startedAt": "2025-09-02T17:13:28.626Z",
+      "durationMs": 3413,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 4,
+      "startedAt": "2025-09-02T17:13:34.041Z",
+      "durationMs": 3687,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 5,
+      "startedAt": "2025-09-02T17:13:39.735Z",
+      "durationMs": 3293,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 6,
+      "startedAt": "2025-09-02T17:13:45.031Z",
+      "durationMs": 2682,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 7,
+      "startedAt": "2025-09-02T17:13:49.721Z",
+      "durationMs": 3764,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 8,
+      "startedAt": "2025-09-02T17:13:55.490Z",
+      "durationMs": 3122,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 9,
+      "startedAt": "2025-09-02T17:14:00.614Z",
+      "durationMs": 3867,
+      "status": "success"
+    },
+    {
+      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
+      "attempt": 10,
+      "startedAt": "2025-09-02T17:14:06.484Z",
+      "durationMs": 3609,
       "status": "success"
     }
   ],
   "summary": {
-    "totalAttempts": 1,
-    "totalSuccesses": 1,
+    "totalAttempts": 20,
+    "totalSuccesses": 20,
     "overallSuccessRate": 1,
-    "totalDurationMs": 22658,
+    "totalDurationMs": 222179,
     "siteSummaries": {
-      "https://2captcha.com/demo/cloudflare-turnstile-challenge": {
-        "attempts": 1,
-        "successes": 1,
+      "https://2captcha.com/demo/cloudflare-turnstile": {
+        "attempts": 10,
+        "successes": 10,
         "successRate": 1,
-        "avgDurationMs": 22658
+        "avgDurationMs": 18693.4
+      },
+      "https://2captcha.com/demo/cloudflare-turnstile-challenge": {
+        "attempts": 10,
+        "successes": 10,
+        "successRate": 1,
+        "avgDurationMs": 3524.5
       }
     }
   },
-  "generatedAt": "2025-09-02T16:35:08.084Z"
+  "generatedAt": "2025-09-02T17:14:11.473Z"
 }

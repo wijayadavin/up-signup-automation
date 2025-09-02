@@ -8,7 +8,7 @@
     "build": "tsc && node scripts/fix-imports.js",
     "start": "node dist/main.js",
     "start:upwork": "node dist/upwork.js --pages 25 --out out/jobs.json --restore-session",
-    "start:turnstile": "node dist/main.js turnstile --attempts 1 --timeout 90 --out out/turnstile_results.json --no-proxy --no-headless --no-stealth",
+    "start:turnstile": "node dist/main.js turnstile --attempts 10 --timeout 90 --out out/turnstile_results.json --no-proxy --no-headless --no-stealth",
     "dev": "tsx src/main.ts",
     "migrate": "tsx src/migrate.ts",
     "lint": "eslint src --ext .ts",
