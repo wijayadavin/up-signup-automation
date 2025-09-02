@@ -87,7 +87,7 @@ const turnstileCmd = command({
       long: 'no-proxy',
       short: 'n',
       description: 'Disable proxy and use direct connection',
-      defaultValue: () => true
+      defaultValue: () => false
     }),
     noStealth: flag({
       type: boolean,
@@ -236,112 +236,41 @@ async function solveTurnstileChallenge(
     // Set viewport
     await page.setViewport({ width: 1280, height: 720 });
     
-    // Inject the interception script for challenge sites (following 2captcha docs exactly)
+    // Inject the interception script for challenge sites (exact match from working example)
     if (siteUrl.includes('cloudflare-turnstile-challenge')) {
+      console.log('Injecting interception script for challenge sites');
       await page.evaluateOnNewDocument(() => {
-        console.clear = () => console.log('Console was cleared');
+        console.clear = () => console.log('Console was cleared')
         const i = setInterval(() => {
-          if ((window as any).turnstile) {
-            clearInterval(i);
-            (window as any).turnstile.render = (a: any, b: any) => {
-              let params = {
-                sitekey: b.sitekey,
-                pageurl: window.location.href,
-                data: b.cData,
-                pagedata: b.chlPageData,
-                action: b.action,
-                userAgent: navigator.userAgent,
-                json: 1,
-              };
-              // we will intercept the message in puppeteer
-              console.log('intercepted-params:' + JSON.stringify(params));
-              (window as any).cfCallback = b.callback;
-              return;
-            };
-          }
-        }, 50);
-      });
-      
-      // Alternative approach: Intercept api.js requests and replace with custom script
-      await page.setRequestInterception(true);
-      page.on('request', (request: any) => {
-        if (request.url().includes('api.js') && request.url().includes('challenges.cloudflare.com')) {
-          logger.info('Intercepting api.js request, replacing with custom script');
-          request.respond({
-            status: 200,
-            contentType: 'application/javascript',
-            body: `
-              // Custom api.js replacement
-              window.turnstile = {
-                render: function(container, options) {
-                  let params = {
-                    sitekey: options.sitekey,
-                    pageurl: window.location.href,
-                    data: options.cData,
-                    pagedata: options.chlPageData,
-                    action: options.action,
-                    userAgent: navigator.userAgent,
-                    json: 1,
-                  };
-                  console.log('intercepted-params:' + JSON.stringify(params));
-                  window.cfCallback = options.callback;
+            if ((window as any).turnstile) {
+                clearInterval(i);
+                (window as any).turnstile.render = (a: any, b: any) => {
+                    let params = {
+                        sitekey: b.sitekey,
+                        pageurl: window.location.href,
+                        data: b.cData,
+                        pagedata: b.chlPageData,
+                        action: b.action,
+                        userAgent: navigator.userAgent,
+                        json: 1
+                    }
+                    // we will intercept the message in puppeeter
+                    console.log('intercepted-params:' + JSON.stringify(params));
+                    (window as any).cfCallback = b.callback;
+                    return
                 }
-              };
-            `
-          });
-        } else {
-          request.continue();
-        }
+            }
+        }, 50)
       });
     }
     
-    // Navigate to the site
-    logger.info(`Navigating to: ${siteUrl}`);
-    await page.goto(siteUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-    
-    // Wait for the page to be fully loaded
-    logger.info('Waiting for page to be fully loaded...');
-    
-    // Wait for DOM to be ready
-    await page.waitForFunction(() => {
-      return document.readyState === 'complete';
-    }, { timeout: 10000 });
-    
-    // Additional wait for dynamic content
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
-    // For challenge sites, wait for Turnstile widget to be present
-    if (siteUrl.includes('cloudflare-turnstile-challenge')) {
-      logger.info('Waiting for Turnstile widget to load...');
-      try {
-        // Wait for either the turnstile iframe or the turnstile div
-        await page.waitForFunction(() => {
-          const iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
-          const turnstileDiv = document.querySelector('.cf-turnstile');
-          return iframe || turnstileDiv;
-        }, { timeout: 15000 });
-        logger.info('Turnstile widget detected');
-      } catch (error) {
-        logger.warn('Turnstile widget not found, continuing anyway...');
-      }
-    }
-    
-    // For regular sites, wait for the cf-turnstile div
-    else {
-      logger.info('Waiting for cf-turnstile div...');
-      try {
-        await page.waitForSelector('.cf-turnstile', { timeout: 10000 });
-        logger.info('cf-turnstile div found');
-      } catch (error) {
-        logger.warn('cf-turnstile div not found, continuing anyway...');
-      }
-    }
-    
-    // Set up console message listener for challenge sites
+    // Set up console message listener for challenge sites BEFORE navigation
     let interceptedParams: any = null;
     if (siteUrl.includes('cloudflare-turnstile-challenge')) {
+      logger.info('Setting up console message listener for challenge site...');
       page.on('console', async (msg: any) => {
         const txt = msg.text();
+        logger.info(`[WEBSITE] Console: ${txt}`);
         if (txt.includes('intercepted-params:')) {
           try {
             const params = JSON.parse(txt.replace('intercepted-params:', ''));
@@ -354,29 +283,25 @@ async function solveTurnstileChallenge(
       });
     }
     
-    // For 2captcha demo pages, look for the checkbox first
-    logger.info('Looking for verification checkbox...');
+    // Navigate to the site
+    logger.info(`Navigating to: ${siteUrl}`);
     
-    try {
-      // Wait for the checkbox using XPath
-      const checkboxXPath = "//div[@class='cb-c' and @role='alert']//input[@type='checkbox']";
-      const checkbox = await page.waitForXPath(checkboxXPath, { timeout: 10000 });
+    if (siteUrl.includes('cloudflare-turnstile-challenge')) {
+      // For challenge sites, don't wait for page to be fully loaded
+      await page.goto(siteUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      logger.info('Challenge page loaded, waiting for parameters...');
+    } else {
+      // For regular sites, wait for full page load
+      await page.goto(siteUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      logger.info('Waiting for page to be fully loaded...');
       
-      if (checkbox) {
-        logger.info('Found verification checkbox, clicking it...');
-        await checkbox.click();
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Wait for the checkbox to be checked
-        await page.waitForFunction(() => {
-          const checkbox = document.querySelector('input[type="checkbox"]') as HTMLInputElement;
-          return checkbox && checkbox.checked;
-        }, { timeout: 10000 });
-        
-        logger.info('Checkbox clicked and verified');
-      }
-    } catch (error) {
-      logger.info('No checkbox found, proceeding with iframe detection...');
+      // Wait for DOM to be ready
+      await page.waitForFunction(() => {
+        return document.readyState === 'complete';
+      }, { timeout: 10000 });
+      
+      // Additional wait for dynamic content
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
     
     let result: any;
@@ -385,135 +310,23 @@ async function solveTurnstileChallenge(
       // For challenge sites, wait for intercepted parameters
       logger.info('Waiting for intercepted parameters...');
       
-      // Wait for the turnstile widget to load first
-      try {
-        await page.waitForSelector('iframe[src*="challenges.cloudflare.com"]', { timeout: 15000 });
-        logger.info('Turnstile iframe found, waiting for parameters...');
-      } catch (error) {
-        logger.warn('Turnstile iframe not found, continuing anyway...');
-      }
-      
-      // Wait for parameters with better logging and more robust detection
-      let attempts = 0;
-      const maxAttempts = 200; // Increased from 150
-      while (!interceptedParams && attempts < maxAttempts) {
+      // Wait for parameters with timeout
+      const startTime = Date.now();
+      while (!interceptedParams && (Date.now() - startTime) < 30000) {
         await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
-        
-        // Log progress every 20 attempts
-        if (attempts % 20 === 0) {
-          logger.info(`Waiting for parameters... (${attempts}/${maxAttempts}) - ${(attempts/maxAttempts*100).toFixed(1)}%`);
-          
-          // Check if turnstile is available and try to trigger it
-          const turnstileAvailable = await page.evaluate(() => {
-            return !!(window as any).turnstile;
-          });
-          
-          if (turnstileAvailable && attempts > 50) {
-            logger.info('Turnstile object found, attempting to trigger render...');
-            await page.evaluate(() => {
-              const turnstileDiv = document.querySelector('.cf-turnstile');
-              if (turnstileDiv && (window as any).turnstile) {
-                (window as any).turnstile.render(turnstileDiv, {
-                  sitekey: '0x4AAAAAAAD7Dju0CMHhJHhh',
-                  callback: (token: string) => {
-                    console.log('Manual callback triggered with token:', token);
-                  }
-                });
-              }
-            });
-          }
-        }
       }
       
       if (!interceptedParams) {
-        logger.warn('Failed to intercept parameters after maximum attempts, trying fallbacks...');
-        
-        // FALLBACK 1: Try to manually trigger the turnstile render
-        logger.info('Attempting to manually trigger turnstile render...');
-        await page.evaluate(() => {
-          const turnstileDiv = document.querySelector('.cf-turnstile');
-          if (turnstileDiv && (window as any).turnstile) {
-            (window as any).turnstile.render(turnstileDiv, {
-              sitekey: '0x4AAAAAAAD7Dju0CMHhJHhh',
-              callback: (token: string) => {
-                console.log('Manual callback triggered with token:', token);
-              }
-            });
-          }
-        });
-        
-        // Wait a bit more
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        if (!interceptedParams) {
-          // FALLBACK 2: Try to extract parameters from the page directly
-          logger.info('Attempting to extract parameters from page directly...');
-          const extractedParams = await page.evaluate(() => {
-            // Look for any script tags that might contain turnstile configuration
-            const scripts = document.querySelectorAll('script');
-            for (const script of scripts) {
-              const content = script.textContent || '';
-              if (content.includes('turnstile') && content.includes('sitekey')) {
-                // Try to extract sitekey from script content
-                const sitekeyMatch = content.match(/sitekey['"]?\s*:\s*['"]([^'"]+)['"]/);
-                if (sitekeyMatch) {
-                  return {
-                    sitekey: sitekeyMatch[1],
-                    pageurl: window.location.href,
-                    data: '',
-                    pagedata: '',
-                    action: 'verify',
-                    userAgent: navigator.userAgent,
-                    json: 1,
-                  };
-                }
-              }
-            }
-            
-            // Look for data attributes on turnstile elements
-            const turnstileElement = document.querySelector('.cf-turnstile, [data-sitekey]');
-            if (turnstileElement) {
-              const sitekey = turnstileElement.getAttribute('data-sitekey');
-              if (sitekey) {
-                return {
-                  sitekey,
-                  pageurl: window.location.href,
-                  data: '',
-                  pagedata: '',
-                  action: 'verify',
-                  userAgent: navigator.userAgent,
-                  json: 1,
-                };
-              }
-            }
-            
-            return null;
-          });
-          
-          if (extractedParams) {
-            interceptedParams = extractedParams;
-            logger.info('Extracted parameters from page:', interceptedParams);
-          } else {
-            // FALLBACK 3: Use a known sitekey for the demo page
-            logger.info('Using fallback sitekey for demo page...');
-            interceptedParams = {
-              sitekey: '0x4AAAAAAAD7Dju0CMHhJHhh',
-              pageurl: siteUrl,
-              data: '',
-              pagedata: '',
-              action: 'verify',
-              userAgent: await page.evaluate(() => navigator.userAgent),
-              json: 1,
-            };
-          }
-        }
+        throw new Error('Failed to intercept turnstile parameters within timeout');
       }
       
       logger.info('Solving challenge with intercepted parameters...');
-      // For challenge sites, use turnstile method with intercepted parameters
-      // Use the basic turnstile method with sitekey and pageurl
-      result = await solver.turnstile(interceptedParams.sitekey, interceptedParams.pageurl);
+      // Use turnstile method with challenge parameters in extra object (bypass type restrictions)
+      result = await solver.turnstile(interceptedParams.sitekey, interceptedParams.pageurl, {
+        action: interceptedParams.action,
+        data: interceptedParams.data,
+        pagedata: interceptedParams.pagedata
+      } as any);
     } else {
       // For regular sites, look for the cf-turnstile div with data-sitekey attribute
       logger.info('Looking for cf-turnstile div with data-sitekey...');
@@ -541,77 +354,28 @@ async function solveTurnstileChallenge(
     
     logger.info(`Challenge solved, token: ${result.data.substring(0, 50)}...`);
     
-    // Execute the token in the page (following 2captcha docs exactly)
+    // Execute the token in the page
     await page.evaluate((token: string, isChallengeSite: boolean) => {
       if (isChallengeSite) {
-        // For challenge sites, execute the callback directly as per docs
+        // For challenge sites, execute the callback directly
         if ((window as any).cfCallback) {
           (window as any).cfCallback(token);
           console.log('Challenge callback executed with token');
-        } else {
-          // Fallback: try to find and execute any callback function
-          const callbacks = Object.keys(window).filter(key => key.toLowerCase().includes('callback'));
-          for (const callbackName of callbacks) {
-            if (typeof (window as any)[callbackName] === 'function') {
-              (window as any)[callbackName](token);
-              console.log(`Executed callback: ${callbackName}`);
-              break;
-            }
-          }
         }
       } else {
         // For regular sites, set the token in inputs
-        const turnstileResponseInput = document.querySelector('[name="cf-turnstile-response"]') as HTMLInputElement;
-        if (turnstileResponseInput) {
-          turnstileResponseInput.value = token;
-          console.log('Token set in cf-turnstile-response input');
-        }
-        
-        // Also try the g-recaptcha-response input for compatibility
-        const recaptchaResponseInput = document.querySelector('[name="g-recaptcha-response"]') as HTMLInputElement;
-        if (recaptchaResponseInput) {
-          recaptchaResponseInput.value = token;
-          console.log('Token set in g-recaptcha-response input');
-        }
-      }
-      
-      // Find the turnstile widget and set the token
-      const turnstileWidget = (window as any).turnstile;
-      if (turnstileWidget) {
-        const siteKeyElement = document.querySelector('.cf-turnstile[data-sitekey]') as HTMLElement;
-        const siteKey = siteKeyElement?.getAttribute('data-sitekey');
-        if (siteKey) {
-          turnstileWidget.render('.cf-turnstile', {
-            sitekey: siteKey,
-            callback: (token: string) => {
-              console.log('Turnstile callback executed with token:', token);
-            }
-          });
-        }
-      }
-      
-      // Alternative: try to find and fill any hidden input
-      const inputs = document.querySelectorAll('input[type="hidden"]');
-      inputs.forEach((input: any) => {
-        if (input.name && input.name.toLowerCase().includes('captcha')) {
+        const turnstileResponseInputs = document.querySelectorAll('[name="cf-turnstile-response"]');
+        turnstileResponseInputs.forEach((input: any) => {
           input.value = token;
-        }
-      });
-      
-      // Trigger form submission by clicking submit button or pressing enter
-      const submitButton = document.querySelector('button[type="submit"], input[type="submit"], .submit-btn');
-      if (submitButton) {
-        (submitButton as HTMLElement).click();
-        console.log('Submit button clicked');
-      } else {
-        // Try to submit any form
-        const forms = document.querySelectorAll('form');
-        forms.forEach((form: any) => {
-          if (form.querySelector('input[type="hidden"]')) {
-            form.submit();
-            console.log('Form submitted');
-          }
+          console.log('Token set in cf-turnstile-response input');
         });
+        
+        // Click the Check button
+        const checkButton = document.querySelector('button[data-action="demo_action"]');
+        if (checkButton) {
+          (checkButton as HTMLElement).click();
+          console.log('Check button clicked');
+        }
       }
     }, result.data, siteUrl.includes('cloudflare-turnstile-challenge'));
     
@@ -621,66 +385,88 @@ async function solveTurnstileChallenge(
     }, timeoutMs);
     
     try {
-      // Look for success indicators with more specific checks
-      await page.waitForFunction(() => {
-        const body = document.body.textContent || '';
-        const url = window.location.href;
+      if (siteUrl.includes('cloudflare-turnstile-challenge')) {
+        // For challenge sites, wait for success message
+        logger.info('Challenge site - waiting for success message...');
         
-        // Check for success text
-        if (body.includes('success') || body.includes('verified') || body.includes('passed')) {
-          return true;
-        }
+        // Wait for page to finish loading first
+        logger.info('Waiting for page to finish loading...');
+        await page.waitForFunction(() => document.readyState === 'complete', { timeout: 30000 });
         
-        // Check for success elements
-        if (document.querySelector('.success, [data-success="true"], .alert-success')) {
-          return true;
-        }
+        // Additional wait for dynamic content to load
+        logger.info('Waiting additional 10 seconds for dynamic content...');
+        await new Promise(resolve => setTimeout(resolve, 10000));
         
-        // Check if we're redirected to a success page
-        if (url.includes('success') || url.includes('verified')) {
-          return true;
-        }
+        // Debug: Check what's on the page
+        const pageContent = await page.evaluate(() => document.body.innerHTML);
+        logger.info(`Page HTML preview: ${pageContent.substring(0, 500)}...`);
         
-                 // Check if the turnstile widget is hidden (indicating success)
-         const turnstileWidget = document.querySelector('.cf-turnstile') as HTMLElement;
-         if (turnstileWidget && turnstileWidget.style.display === 'none') {
-           return true;
-         }
-        
-        // Check if there's a success message in the page
-        const successElements = document.querySelectorAll('*');
-        for (const element of successElements) {
-          const text = element.textContent || '';
-          if (text.includes('Verification successful') || text.includes('Challenge passed')) {
+        // Wait for success message with longer timeout
+        logger.info('Waiting for success message to appear...');
+        await page.waitForFunction(() => {
+          const successElement = document.querySelector('p._successMessage_1ndnh_1');
+          if (successElement && successElement.textContent?.includes('Captcha is passed successfully!')) {
             return true;
           }
-        }
+          return false;
+        }, { timeout: 90000 }); // Increased to 90 seconds
         
-        return false;
-      }, { timeout: timeoutMs });
-      
-      clearTimeout(successTimeout);
-      logger.info('Success indication found!');
-      return true;
+        clearTimeout(successTimeout);
+        logger.info('Success message found on challenge page!');
+        return true;
+        
+      } else {
+        // For regular sites, use existing logic
+        await page.waitForFunction((siteUrl: string) => {
+          const body = document.body.textContent || '';
+          const url = window.location.href;
+          
+          // Check for the specific JSON success response
+          if (body.includes('"success": true') && body.includes('"error-codes": []')) {
+            console.log('Found JSON success response');
+            return true;
+          }
+          
+          // Check for success messages
+          if (body.includes('Verification successful') || 
+              body.includes('Challenge passed') || 
+              body.includes('Success') ||
+              body.includes('Verified') ||
+              body.includes('Turnstile solved correctly')) {
+            return true;
+          }
+          
+          // Check for error messages
+          if (body.includes('Turnstile solved incorrectly') || 
+              body.includes('Error') || 
+              body.includes('Failed') ||
+              body.includes('"success": false')) {
+            return false;
+          }
+          
+          // Check if URL changed
+          if (url !== siteUrl) {
+            return true;
+          }
+          
+          return false;
+        }, { timeout: timeoutMs }, siteUrl);
+        
+        clearTimeout(successTimeout);
+        logger.info('Success indication found!');
+        return true;
+      }
       
     } catch (error) {
       clearTimeout(successTimeout);
       
-      // Check if we're still on the same page (might indicate success)
+      // Check if we're still on the same page
       const currentUrl = page.url();
       if (currentUrl !== siteUrl) {
         logger.info('Page redirected, assuming success');
         return true;
       }
       
-      // Check for any error messages
-      const errorElements = await page.$$('.error, .failure, [data-error]');
-      if (errorElements.length > 0) {
-        logger.warn('Error elements found on page');
-        return false;
-      }
-      
-      // If no clear success/failure indication, assume failure
       logger.warn('No clear success/failure indication found');
       return false;
     }

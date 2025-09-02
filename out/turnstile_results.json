@@ -3,33 +3,24 @@
     {
       "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
       "attempt": 1,
-      "startedAt": "2025-09-01T20:48:51.038Z",
-      "durationMs": 585,
-      "status": "failure",
-      "errorMessage": "net::ERR_INVALID_AUTH_CREDENTIALS at https://2captcha.com/demo/cloudflare-turnstile-challenge"
-    },
-    {
-      "site": "https://2captcha.com/demo/cloudflare-turnstile-challenge",
-      "attempt": 2,
-      "startedAt": "2025-09-01T20:48:53.630Z",
-      "durationMs": 221,
-      "status": "failure",
-      "errorMessage": "net::ERR_INVALID_AUTH_CREDENTIALS at https://2captcha.com/demo/cloudflare-turnstile-challenge"
+      "startedAt": "2025-09-02T16:34:44.128Z",
+      "durationMs": 22658,
+      "status": "success"
     }
   ],
   "summary": {
-    "totalAttempts": 2,
-    "totalSuccesses": 0,
-    "overallSuccessRate": 0,
-    "totalDurationMs": 806,
+    "totalAttempts": 1,
+    "totalSuccesses": 1,
+    "overallSuccessRate": 1,
+    "totalDurationMs": 22658,
     "siteSummaries": {
       "https://2captcha.com/demo/cloudflare-turnstile-challenge": {
-        "attempts": 2,
-        "successes": 0,
-        "successRate": 0,
-        "avgDurationMs": 403
+        "attempts": 1,
+        "successes": 1,
+        "successRate": 1,
+        "avgDurationMs": 22658
       }
     }
   },
-  "generatedAt": "2025-09-01T20:48:55.097Z"
+  "generatedAt": "2025-09-02T16:35:08.084Z"
 }
